@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exora | Free AI Study Workspace for Med Students</title>
+    <meta name="description" content="The best free alternative to RemNote. An intelligent, AI-powered study workspace tailored for med students. Upload PDFs, generate flashcards, and master medical concepts for free.">
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Exora",
+      "url": "https://omnote.online/app/",
+      "applicationCategory": "EducationalApplication",
+      "operatingSystem": "All",
+      "description": "Free AI-powered study workspace and best alternative to RemNote. Upload PDFs, generate flashcards, and study smarter.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+    </script>
+   <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js" integrity="sha384-uLiAv4VcjM5H2Jsqzl8EajEaxPugj1CIzQaCjQ8c5//vC+elhxO5pZfXGxoLQi1W" crossorigin="anonymous"></script>
+   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';</script>
+   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
+   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" integrity="sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F" crossorigin="anonymous"></script>
+   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js" integrity="sha384-XQqX/4yiUGu+oyr87jvWzRuqBUK/adrY0DunhL+tID9m/9dwSpV8h9Fk/Sg6ifVQ" crossorigin="anonymous"></script>
+    <script src="js/sanitize.js"></script>
+
+    <script>
+      // Apply the saved theme before paint to avoid a white flash.
+      (function () {
+        try {
+          if (localStorage.getItem('omnote_theme') === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css?v=3">
+    <link rel="stylesheet" href="css/rebrand.css">
+   <link rel="stylesheet" href="css/layout-polish.css">
+  <link rel="stylesheet" href="css/dashboard.css?v=2">
+  <link rel="stylesheet" href="css/workspace.css">
+  <link rel="stylesheet" href="css/views-polish.css">
+  <link rel="stylesheet" href="css/dark-mode.css">
+
+
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-T4Q9VX8418"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-T4Q9VX8418');
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"on-tertiary-fixed":"#191c1e","secondary-container":"#d5e0f8","on-surface":"#0b1c30","primary-fixed":"#a1effd","surface-container-highest":"#d3e4fe","secondary-fixed-dim":"#bcc7de","on-primary":"#ffffff","outline":"#6f797b","surface-tint":"#006874","primary-fixed-dim":"#85d3e0","surface-container-high":"#dce9ff","on-secondary-fixed-variant":"#3c475a","tertiary-fixed-dim":"#c4c7c9","tertiary":"#494c4e","inverse-on-surface":"#eaf1ff","primary-container":"#0d6e7a","on-secondary-container":"#586377","on-secondary":"#ffffff","tertiary-container":"#616466","inverse-primary":"#85d3e0","surface-bright":"#f8f9ff","on-error":"#ffffff","on-tertiary-container":"#dfe1e3","on-primary-fixed-variant":"#004f58","error-container":"#ffdad6","surface":"#f8f9ff","on-primary-fixed":"#001f24","tertiary-fixed":"#e0e3e5","on-primary-container":"#9feefb","surface-dim":"#cbdbf5","error":"#ba1a1a","on-tertiary-fixed-variant":"#444749","on-error-container":"#93000a","inverse-surface":"#213145","outline-variant":"#bec8ca","on-surface-variant":"#3f484a","surface-container":"#e5eeff","secondary-fixed":"#d8e3fb","on-secondary-fixed":"#111c2d","on-background":"#0b1c30","background":"#f8f9ff","surface-container-lowest":"#ffffff","primary":"#2b5a8e","on-tertiary":"#ffffff","secondary":"#545f73","surface-variant":"#d3e4fe","surface-container-low":"#eff4ff"},"borderRadius":{"DEFAULT":"0px","sm":"2px","md":"0px","lg":"0px","xl":"0px","2xl":"0px","3xl":"0px","full":"0px"},"spacing":{"stack-md":"1rem","stack-sm":"0.5rem","container-max":"1400px","margin-mobile":"1rem","gutter":"1.5rem","stack-lg":"2rem"},"fontFamily":{"sans":["Arial","Helvetica","sans-serif"],"headline-lg-mobile":["Arial","Helvetica","sans-serif"],"headline-lg":["Arial","Helvetica","sans-serif"],"title-md":["Arial","Helvetica","sans-serif"],"body-lg":["Arial","Helvetica","sans-serif"],"label-sm":["Arial","Helvetica","sans-serif"],"label-caps":["Arial","Helvetica","sans-serif"],"headline-xl":["Arial","Helvetica","sans-serif"],"body-md":["Arial","Helvetica","sans-serif"]},"fontSize":{"headline-lg-mobile":["20px",{"lineHeight":"1.3","fontWeight":"700"}],"headline-lg":["24px",{"lineHeight":"1.3","fontWeight":"700"}],"title-md":["18px",{"lineHeight":"1.4","fontWeight":"600"}],"body-lg":["16px",{"lineHeight":"1.6","fontWeight":"400"}],"label-sm":["12px",{"lineHeight":"1","fontWeight":"500"}],"label-caps":["12px",{"lineHeight":"1","letterSpacing":"0.05em","fontWeight":"700"}],"headline-xl":["36px",{"lineHeight":"1.2","letterSpacing":"-0.02em","fontWeight":"800"}],"body-md":["13px",{"lineHeight":"1.4","fontWeight":"400"}]}}}}</script>
+</head>
+
+<body class="bg-[#f4f4f4] font-sans text-[13px] text-gray-800 leading-snug">
+
+    <!-- Full Screen Login Gatekeeper -->
+    <div id="login-screen" style="display:none;">
+        <div class="login-card">
+            <div class="login-logo"><img src="assets/logo.png" alt="Exora" class="login-logo-img" /><span>Exora</span></div>
+            <p class="login-subtitle">Sign in to access your cloud workspace.</p>
+
+            <input type="text" id="auth-name" class="login-input" placeholder="Your name (for sign up)" maxlength="40" autocomplete="name">
+            <input type="email" id="auth-email" class="login-input" placeholder="Email Address" autocomplete="email">
+            <input type="password" id="auth-password" class="login-input" placeholder="Password" autocomplete="current-password">
+
+            <div id="auth-error"></div>
+
+            <button class="login-btn-primary" onclick="window.handleLogin()">Log In</button>
+            <button class="login-btn-secondary" onclick="window.handleRegister()">Create Account</button>
+
+
+
+
+        </div>
+    </div>
+
+
+    <!-- Main App Wrapper -->
+    <div id="app-wrapper" style="display: none; height: 100vh; width: 100%;">
+<aside class="fixed left-0 top-0 h-full w-72 bg-surface-container-low z-50 flex flex-col border-r border-outline-variant/30">
+    <!-- Top Header section matching UWorld's centered style -->
+    <div class="pt-8 pb-6 flex flex-col items-center justify-center border-b border-outline-variant/30 text-center relative">
+        <img src="assets/logo.png" alt="Exora Logo" class="w-14 h-14 rounded-2xl shadow-lg mb-3 object-cover border border-outline-variant/30">
+        <h1 class="font-headline-lg text-[22px] text-[#007a7a] tracking-tight leading-tight mb-1">Exora</h1>
+        <h2 class="text-[13px] text-on-surface-variant font-semibold px-4 uppercase tracking-wider" id="sidebar-qbank-name">Medical QBank</h2>
+    </div>
+
+    <!-- Navigation Menu -->
+    <nav class="flex-1 w-full overflow-y-auto py-2 px-3">
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-[#007a7a] bg-[#e6f2f2] rounded-lg transition-colors font-bold" data-path="home" href="#" onclick="window.goHome();">
+            <i class="fa-solid fa-home text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Home</span>
+        </a>
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="browse" href="#" onclick="window.showQBankSubjects && window.showQBankSubjects();">
+            <i class="fa-solid fa-border-all text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Browse Specialties</span>
+        </a>
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="exam-prep" href="#" onclick="window.openExamPrepTab && window.openExamPrepTab();">
+            <i class="fa-solid fa-graduation-cap text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Exam Prep</span>
+        </a>
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="flashcards" href="#" onclick="window.openFlashcardsExplorer && window.openFlashcardsExplorer();">
+            <i class="fa-solid fa-layer-group text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Flashcards</span>
+        </a>
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="planner" href="#" onclick="window.openPlanner && window.openPlanner();">
+            <i class="fa-regular fa-calendar text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Study Plan</span>
+        </a>
+
+        <div class="my-4 border-t border-gray-200 mx-2"></div>
+
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="performance" href="#" onclick="window.openPerformance && window.openPerformance();">
+            <i class="fa-solid fa-chart-simple text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Analytics</span>
+        </a>
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="resources" href="#" onclick="window.openQBankResourcesTab && window.openQBankResourcesTab();">
+            <i class="fa-regular fa-file-lines text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Resources</span>
+        </a>
+        
+        <div class="my-4 border-t border-gray-200 mx-2"></div>
+
+        <a id="admin-panel-btn" style="display: none;" class="items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" href="#" onclick="window.openAdminPanel && window.openAdminPanel();">
+            <i class="fa-solid fa-shield-halved text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Admin Panel</span>
+        </a>
+    </nav>
+
+
+</aside>
+<div class="pl-72 w-full h-screen overflow-y-auto">
+<header class="fixed top-0 left-72 right-0 h-[64px] bg-white z-40 px-8 flex items-center justify-between border-b border-gray-200">
+    <!-- Search -->
+    <div class="flex-1 max-w-3xl mr-6">
+        <div class="relative flex items-center group w-full">
+            <i class="fa-solid fa-search absolute left-4 text-gray-400 text-[14px]"></i>
+            <input id="home-search-input" class="w-full h-10 pl-11 pr-14 bg-white border border-gray-200 rounded-lg text-gray-800 text-[14px] focus:outline-none focus:border-[#007a7a] focus:ring-1 focus:ring-[#007a7a] transition-shadow placeholder-gray-400" placeholder="Search subjects, chapters, or question IDs..." type="text" onkeydown="window.handleHomeSearch && window.handleHomeSearch(event)" oninput="window.handleHomeSearchInput && window.handleHomeSearchInput(event)" onfocus="window.handleHomeSearchFocus && window.handleHomeSearchFocus(event)"/>
+            <div class="absolute right-3 top-1/2 transform -translate-y-1/2 bg-gray-100 text-gray-500 text-[11px] font-bold px-2 py-1 rounded">Ctrl K</div>
+            <div id="home-search-dropdown" class="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-lg z-[1001] hidden max-h-80 overflow-y-auto rounded-b-lg mt-1"></div>
+        </div>
+    </div>
+    
+    <!-- Right cluster -->
+    <div class="flex items-center gap-4 text-gray-600">
+        <!-- Change QBank Button -->
+        <button onclick="window.openQBankSelection && window.openQBankSelection()" class="px-4 py-1.5 bg-[#f8fafc] hover:bg-[#e2e8f0] text-[#007a7a] text-[13px] font-bold rounded-full border border-[#e2e8f0] transition-colors flex items-center gap-2 mr-2">
+            <i class="fa-solid fa-book-open"></i> Change QBank
+        </button>
+        
+        <!-- Notifications with badge -->
+        <button id="notif-bell" onclick="window.toggleNotifications && window.toggleNotifications()" class="relative hover:text-gray-900 transition-colors text-[18px]">
+            <i class="fa-regular fa-bell"></i>
+            <span id="notif-bell-badge" style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;background:#ef4444;border-radius:50%;border:1px solid white;"></span>
+        </button>
+        
+        <!-- Profile Pill -->
+        <div class="flex items-center gap-3 cursor-pointer hover:bg-gray-50 p-1.5 rounded-full transition-colors border border-transparent hover:border-gray-200" onclick="window.openProfileSettings && window.openProfileSettings();">
+            <div class="w-8 h-8 rounded-full bg-[#007a7a] text-white flex items-center justify-center font-bold text-sm">
+                O
+            </div>
+            <span class="font-bold text-gray-800 text-[14px]" id="header-user-name">Omar</span>
+            <i class="fa-solid fa-chevron-down text-[10px] text-gray-400 mr-2"></i>
+        </div>
+    </div>
+</header>
+<main class="relative pt-[50px] bg-[#f4f4f4] min-h-screen">
+  <div id="qbank-home-view" style="display:flex; flex:1; width:100%;">
+    <div id="qbank-home-content" class="w-full"></div>
+  </div>
+  <div id="flashcards-explorer-view" style="display:none; flex:1; width:100%; padding:24px;">
+    <div id="flashcards-explorer-content" class="w-full max-w-[1200px] mx-auto"></div>
+  </div>
+  <div id="resources-view" style="display:none; flex:1; width:100%; padding:24px; overflow-y:auto;"></div>
+  <div id="performance-view" style="display:none; flex:1; width:100%; padding:24px;">
+    <div id="performance-content" class="w-full max-w-[1200px] mx-auto"></div>
+  </div>
+  <div id="planner-view" style="display:none; flex:1; width:100%; padding:24px;">
+    <div id="planner-content" class="w-full max-w-[1200px] mx-auto"></div>
+  </div>
+</main>
+</div>
+</div>
+
+    <!-- Full-Screen Flashcard Viewer (USMLE Style Light Mode) -->
+        <div id="review-modal" class="usmle-fullscreen" style="display:none;">
+            <!-- Top Bar -->
+            <div class="usmle-topbar">
+                <div class="usmle-topbar-left">
+                    <span class="usmle-item-info">Flashcard <span id="review-count">1</span></span>
+                    <span class="usmle-block-info"><i data-lucide="file-text"></i> <span id="review-doc-title">Document</span></span>
+                </div>
+                <div class="usmle-topbar-center">
+                    <button class="usmle-nav-btn" onclick="window.reviewNavPrev()" title="Previous">◀ Previous</button>
+                    <span class="usmle-nav-counter" id="review-nav-counter">1 / 1</span>
+                    <button class="usmle-nav-btn" onclick="window.reviewNavNext()" title="Next">Next ▶</button>
+                </div>
+                <div class="usmle-topbar-right">
+                    
+                    <button class="usmle-tool-btn" onclick="closeFullscreen('review-modal')"><i data-lucide="x"></i> Exit</button>
+                </div>
+            </div>
+
+            <div class="usmle-body">
+                <!-- Left Sidebar: Card Number List -->
+                <div class="usmle-sidebar" id="review-sidebar">
+                    <!-- Populated by JS -->
+                </div>
+
+                <!-- Main Content -->
+                <div class="usmle-content">
+                    <div class="usmle-question-area">
+                        <!-- Mark flag + Edit -->
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom: 16px;">
+                            <button class="usmle-flag-btn" id="review-flag-btn" onclick="window.toggleReviewFlag()" title="Mark Card"><i data-lucide="flag"></i> Mark Card</button>
+                            <button class="usmle-flag-btn" id="review-edit-btn" onclick="window.editCurrentReviewCard()" title="Edit Card (E)"><i data-lucide="pencil"></i> Edit</button>
+                        </div>
+
+                        <!-- Question text -->
+                        <div class="usmle-question-text" id="card-front">Question</div>
+
+                        <!-- Answer options / Revealed answer -->
+                        <div id="card-back" class="usmle-answer-reveal" style="display:none;">
+                            <!-- Populated by JS -->
+                        </div>
+
+                        <button class="usmle-show-answer-btn" id="btn-show-answer" onclick="showAnswer()">Show Answer</button>
+
+                        <!-- Sources Block -->
+                        <div id="card-sources-block" class="usmle-sources-block" style="display:none;">
+                            <div class="usmle-sources-header"><i data-lucide="book-open" style="width:14px;height:14px;vertical-align:-2px;"></i> Source</div>
+                            <div class="sources-quote" id="card-source-text">Source text here...</div>
+                        </div>
+                    </div>
+
+                    <!-- Bottom SRS Actions (SM-2) -->
+                    <div class="usmle-action-bar" id="srs-buttons" style="display:none;">
+                        <button class="usmle-proceed-btn usmle-btn-forgot" onclick="submitReview('again')" title="Forgot — reset (1)"><span style="font-weight:800;">1</span> · Again</button>
+                        <button class="usmle-proceed-btn" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff;" onclick="submitReview('hard')" title="Hard (2)"><span style="font-weight:800;">2</span> · Hard</button>
+                        <button class="usmle-proceed-btn usmle-btn-easy" onclick="submitReview('good')" title="Good (3)"><span style="font-weight:800;">3</span> · Good</button>
+                        <button class="usmle-proceed-btn" style="background:linear-gradient(135deg,#06b6d4,#3b82f6);color:#fff;" onclick="submitReview('easy')" title="Easy (4)"><span style="font-weight:800;">4</span> · Easy</button>
+                    </div>
+                    <div id="card-srs-meta" style="display:none; margin-top:12px; text-align:center; color:var(--text-muted); font-size:0.8rem;"></div>
+                </div>
+            </div>
+
+            <!-- Bottom Status Bar -->
+            <div class="usmle-statusbar">
+                <span id="review-status-text">Press Space to reveal answer</span>
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <span style="font-size:0.8rem;">1=Again &nbsp; 2=Hard &nbsp; 3=Good &nbsp; 4=Easy</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Full-Screen Exam Viewer (USMLE Style Light Mode) -->
+        <div id="exam-modal" class="usmle-fullscreen" style="display:none;">
+            <!-- Top Bar -->
+            <div class="usmle-topbar">
+                <div class="usmle-topbar-left">
+                    <span class="usmle-item-info">Item <span id="exam-current-num">1</span> of <span id="exam-total-num">0</span></span>
+                    <span class="usmle-block-info">Block: <span id="exam-block-info">1 of 1</span></span>
+                </div>
+                <div class="usmle-topbar-center">
+                    <button class="usmle-nav-btn" onclick="window.examNavPrev()" title="Previous">◀ Previous</button>
+                    <span class="usmle-nav-counter" id="exam-nav-counter">1 / 1</span>
+                    <button class="usmle-nav-btn" onclick="window.examNavNext()" title="Next">Next ▶</button>
+                </div>
+                <div class="usmle-topbar-right">
+                    <button class="usmle-tool-btn" onclick="closeFullscreen('exam-modal')"><i data-lucide="x"></i> End Block</button>
+                </div>
+            </div>
+
+            <div class="usmle-body">
+                <!-- Left Sidebar: Question Number List -->
+                <div class="usmle-sidebar" id="exam-sidebar">
+                    <!-- Populated by JS -->
+                </div>
+
+                <!-- Main Content -->
+                <div class="usmle-content">
+                    <div class="usmle-question-area" id="exam-modal-content">
+                        <!-- Exam questions rendered by JS -->
+                    </div>
+
+                    <!-- Bottom Proceed Bar -->
+                    <div class="usmle-action-bar">
+                        <button class="usmle-proceed-btn" onclick="window.examNavNext()">Proceed to Next Item</button>
+                        <button class="usmle-proceed-btn usmle-btn-end" onclick="closeFullscreen('exam-modal')">End Block</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Status Bar -->
+            <div class="usmle-statusbar">
+                <span id="exam-timer-display"><i data-lucide="clock" style="width:14px;height:14px;vertical-align:-2px;"></i> Time Remaining: --:--:--</span>
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <button class="usmle-flag-btn" id="exam-flag-btn" onclick="window.toggleExamFlag()"><i data-lucide="flag" style="width:14px;height:14px;vertical-align:-2px;"></i> Mark Question</button>
+                </div>
+            </div>
+        </div>
+
+
+
+        <!-- QBank Practice Modal -->
+        <div id="qbank-modal" class="usmle-fullscreen" style="display:none;">
+            <div class="usmle-topbar">
+                <div class="usmle-topbar-left">
+                    <span class="usmle-item-info">QBank: <span id="qbank-active-name">None</span></span>
+                </div>
+                <div class="usmle-topbar-center">
+                    <button class="usmle-nav-btn" onclick="window.qbankNext()" title="Next">Next ▶</button>
+                </div>
+                <div class="usmle-topbar-right">
+                    <button class="usmle-tool-btn" onclick="closeFullscreen('qbank-modal')"><i class="fa-solid fa-times"></i> End Session</button>
+                </div>
+            </div>
+            <div class="usmle-body">
+                <!-- Left Sidebar: QBank Questions List -->
+                <div class="usmle-sidebar" id="qbank-sidebar" style="display:none;">
+                    <!-- Populated by JS -->
+                </div>
+                
+                <div class="usmle-content">
+                    <div class="usmle-question-area" id="qbank-question-area" style="position:relative;">
+                        <!-- Content populated by qbank.js -->
+                        <div style="padding:40px;text-align:center;">Select a QBank Category to start practicing.</div>
+                    </div>
+                </div>
+
+                <!-- Answer Party Sidebar (Right Side) -->
+                <div class="usmle-sidebar" id="qbank-party-sidebar" style="display:none; flex-direction:column; width: 320px; min-width: 320px; max-width: 320px; flex-shrink: 0;">
+                    <div class="party-header" style="padding:15px; display:flex; justify-content:space-between; align-items:center;">
+                        <h3 class="font-bold">Party Mode</h3>
+                        <div id="qbank-party-code-display" class="party-code font-mono text-sm px-2 py-1 rounded select-all" title="Invite Code"></div>
+                    </div>
+                    <div id="qbank-party-host-controls" style="display:none; padding:10px;">
+                        <button class="btn-action primary" style="width:100%;" onclick="window.QBankParty.hostStartSession(window.currentQuestions[window.currentIndex]?.id)">Start Session</button>
+                    </div>
+                    <div id="qbank-party-leaderboard" style="flex:1; overflow-y:auto; padding:15px; display:flex; flex-direction:column; gap:10px;"></div>
+                    <div class="party-chat-container" style="height:350px; display:flex; flex-direction:column;">
+                        <div id="qbank-party-chat-history" style="flex:1; overflow-y:auto; padding:10px; font-size:0.9rem; display:flex; flex-direction:column; gap:8px;"></div>
+                        <div class="party-chat-input-area" style="padding:10px; display:flex; gap:8px;">
+                            <input type="text" id="qbank-party-chat-input" class="login-input" style="flex:1; margin:0;" placeholder="Chat..." onkeypress="if(event.key==='Enter') window.QBankParty.sendChatMessage(this.value); if(event.key==='Enter') this.value='';">
+                            <button class="btn-action primary" style="padding:0 12px;" onclick="const el=document.getElementById('qbank-party-chat-input'); window.QBankParty.sendChatMessage(el.value); el.value='';"><i data-lucide="send" style="width:16px;height:16px;"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="usmle-statusbar">
+                <span id="qbank-timer-display"><i class="fa-regular fa-clock" style="width:14px;height:14px;vertical-align:-2px;"></i> Time: 00:00</span>
+            </div>
+        </div>
+
+        <!-- Global Custom Action Settings Modal -->
+        <div id="global-custom-modal" class="modal">
+            <div class="exam-modal-content" style="max-width: 500px;">
+                <button class="exam-close-btn" onclick="closeModal('global-custom-modal')"><i data-lucide="x"></i></button>
+                <div class="exam-title" id="global-custom-title">Configure Custom Action</div>
+                <div style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">Select the topics you want to include.</div>
+                
+                <div style="margin-bottom: 15px; display: flex; justify-content: space-between;">
+                    <button class="btn-dark-pill" onclick="window.toggleAllGlobalTopics(true)">Select All</button>
+                    <button class="btn-dark-pill" onclick="window.toggleAllGlobalTopics(false)">Deselect All</button>
+                </div>
+
+                <div id="global-custom-topics-container" style="max-height: 300px; overflow-y: auto; margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; text-align: left;">
+                    <!-- Checkboxes populated here -->
+                </div>
+                
+                <button id="global-custom-start-btn" class="btn-action primary" style="width: 100%; padding: 14px; font-size: 1.05rem;" onclick="window.startGlobalCustomAction()">Start</button>
+            </div>
+        </div>
+
+        <!-- Image Viewer Modal -->
+        <div id="image-viewer-modal" class="modal">
+            <div class="image-modal-content">
+                <button class="exam-close-btn" onclick="closeModal('image-viewer-modal')"><i data-lucide="x"></i></button>
+                <div id="image-viewer-content" style="margin-top: 20px;">
+                    <!-- Images rendered here -->
+                </div>
+            </div>
+        </div>
+        <!-- Global API Settings Modal -->
+        <div id="api-settings-modal" class="modal">
+            <div class="exam-modal-content" style="max-width: 500px; text-align: left;">
+                <button class="exam-close-btn" onclick="closeModal('api-settings-modal')"><i data-lucide="x"></i></button>
+                <div class="exam-title" style="margin-bottom: 20px;"><i data-lucide="settings"></i> Global Settings</div>
+                
+                <div style="font-weight: 700; margin-bottom: 10px;">Gemini API Keys</div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 15px;">
+                    Keys added here are stored locally on your device. The app will automatically rotate through them if a rate limit is hit.
+                </div>
+                
+                <div id="api-keys-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 15px; display: flex; flex-direction: column; gap: 8px;">
+                    <!-- Populated by app.js -->
+                </div>
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <input type="text" id="new-api-key-input" class="login-input" placeholder="Enter new Gemini API Key..." style="flex: 1; margin: 0; padding: 10px;">
+                    <button class="btn-action primary" onclick="window.handleAddApiKey()" style="padding: 10px 15px;">Add Key</button>
+                </div>
+                
+                <div id="api-key-test-result" style="font-size: 0.85rem; margin-top: 10px; min-height: 20px;"></div>
+            </div>
+        </div>
+
+        
+
+
+
+
+        <!-- Global Loading Overlay -->
+        <div id="global-loading-overlay" style="display: none;">
+            <div class="loading-content" style="background: transparent; border: none; box-shadow: none; max-width: 500px;">
+                <h2 id="loading-title" style="font-size: 1.5rem; margin-bottom: 12px; font-weight: 600; background: none; -webkit-text-fill-color: var(--text-primary);">Exora AI Extracting Flashcards...</h2>
+                <div id="loading-text" class="loading-message" style="margin-bottom: 30px; font-size: 1rem; color: var(--text-muted); max-width: 100%;">Reading the whole textbook in 3 seconds...</div>
+                <div class="press-wrapper" style="margin: 20px auto 0; display: flex; justify-content: center; align-items: center;">
+                    <div class="press">
+                      <div class="sheet"></div>
+                      <div class="roll"></div>
+                      <div class="sheet"></div>
+                      <div class="roll"></div>
+                      <div class="sheet"></div>
+                      <div class="roll"></div>
+                      <div class="sheet"></div>
+                      <div class="sheet"></div>
+                      <div class="sheet"></div>
+                      <div class="sheet"></div>
+                      <div class="sheet"></div>
+                      <div class="roll"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <style>
+            @keyframes widthPulse {
+                0% { width: 10%; }
+                100% { width: 90%; }
+            }
+        </style>
+
+
+        <!-- Admin Panel Modal -->
+        <div id="admin-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); backdrop-filter:blur(6px); z-index:100000; align-items:center; justify-content:center; padding:20px;">
+            <div id="admin-modal-content" style="width:100%; max-width:900px; height:90vh; background:#0f1218; border:1px solid rgba(255,255,255,0.08); border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.6); display:flex; flex-direction:column; overflow:hidden; transition:all 0.2s ease;">
+                <div style="padding:18px 22px; border-bottom:1px solid rgba(255,255,255,0.06); display:flex; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span style="font-size:1.3rem;"><i data-lucide="shield"></i></span>
+                        <div>
+                            <div style="font-weight:800; color:#fff; font-size:1.05rem;">Admin Panel</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn-icon" onclick="window.toggleAdminMaximize()" style="font-size:1.1rem;"><i data-lucide="maximize"></i></button>
+                        <button class="btn-icon" onclick="window.closeAdminPanel()" style="font-size:1.1rem;"><i data-lucide="x"></i></button>
+                    </div>
+                </div>
+                <div style="display:flex; gap:4px; padding:12px 22px 0; border-bottom:1px solid rgba(255,255,255,0.05); flex-wrap:wrap;">
+                    <button class="admin-tab active" data-tab="keys" onclick="window.switchAdminTab('keys')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="key-round" style="width:14px;height:14px;vertical-align:-2px;"></i> AI Providers</button>
+                    <button class="admin-tab" data-tab="capacity" onclick="window.switchAdminTab('capacity')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="gauge" style="width:14px;height:14px;vertical-align:-2px;"></i> AI Capacity</button>
+                    <button class="admin-tab" data-tab="functions" onclick="window.switchAdminTab('functions')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="activity" style="width:14px;height:14px;vertical-align:-2px;"></i> AI Functions</button>
+
+                    <button class="admin-tab" data-tab="maintenance" onclick="window.switchAdminTab('maintenance')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="wrench" style="width:14px;height:14px;vertical-align:-2px;"></i> Maintenance</button>
+                    <button class="admin-tab" data-tab="users" onclick="window.switchAdminTab('users')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="users" style="width:14px;height:14px;vertical-align:-2px;"></i> Users</button>
+                    <button class="admin-tab" data-tab="notifications" onclick="window.switchAdminTab('notifications')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="bell" style="width:14px;height:14px;vertical-align:-2px;"></i> Notifications</button>
+                    <button class="admin-tab" data-tab="stats" onclick="window.switchAdminTab('stats')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="bar-chart-3" style="width:14px;height:14px;vertical-align:-2px;"></i> Stats</button>
+                    <button class="admin-tab" data-tab="qbank" onclick="window.switchAdminTab('qbank')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="stethoscope" style="width:14px;height:14px;vertical-align:-2px;"></i> QBank</button>
+                    <button class="admin-tab" data-tab="examprep" onclick="window.switchAdminTab('examprep')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="graduation-cap" style="width:14px;height:14px;vertical-align:-2px;"></i> Exam Prep</button>
+                    <button class="admin-tab" data-tab="access" onclick="window.switchAdminTab('access')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="key-round" style="width:14px;height:14px;vertical-align:-2px;"></i> Access Requests</button>
+                    <button class="admin-tab" data-tab="reports" onclick="window.switchAdminTab('reports')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="flag" style="width:14px;height:14px;vertical-align:-2px;"></i> Reports</button>
+                    <button class="admin-tab" data-tab="support" onclick="window.switchAdminTab('support')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="life-buoy" style="width:14px;height:14px;vertical-align:-2px;"></i> Support</button>
+                    <button class="admin-tab" data-tab="peerstats" onclick="window.switchAdminTab('peerstats')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="bar-chart-3" style="width:14px;height:14px;vertical-align:-2px;"></i> Peer Stats</button>
+                </div>
+                <div style="flex:1; overflow-y:auto; padding:22px; min-height:0;">
+                    <div id="admin-panel-keys" class="admin-tab-panel">
+                        <div id="admin-keys-content"></div>
+                    </div>
+                    <div id="admin-panel-capacity" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-capacity-content"></div>
+                    </div>
+                    <div id="admin-panel-functions" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-functions-content"></div>
+                    </div>
+                    <div id="admin-panel-maintenance" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-maintenance-content"></div>
+                    </div>
+                    <div id="admin-panel-users" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-users-content"></div>
+                    </div>
+                    <div id="admin-panel-notifications" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-notifications-content"></div>
+                    </div>
+                    <div id="admin-panel-peerstats" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-peerstats-content"></div>
+                    </div>
+                    <div id="admin-panel-stats" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-stats-content"></div>
+                    </div>
+                    <div id="admin-panel-qbank" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-qbank-content">
+                            <h3 style="color:#fff; margin-bottom:15px;">QBank Categories</h3>
+                            <div style="display:flex; gap:10px; margin-bottom:20px;">
+                                <input type="text" id="admin-qbank-name-input" class="login-input" placeholder="New QBank Name (e.g. USMLE Step 1)" style="flex:1;">
+                                <select id="admin-qbank-country-input" class="login-input" style="width:140px; cursor:pointer;">
+                                    <option value="global">🌍 Global</option>
+                                    <option value="usa">🇺🇸 USA</option>
+                                    <option value="uk">🇬🇧 UK</option>
+                                    <option value="australia">🇦🇺 Australia</option>
+                                    <option value="canada">🇨🇦 Canada</option>
+                                    <option value="india">🇮🇳 India</option>
+                                    <option value="europe">🇪🇺 Europe</option>
+                                    <option value="tunisia">🇹🇳 Tunisia</option>
+                                    <option value="algeria">🇩🇿 Algeria</option>
+                                    <option value="morocco">🇲🇦 Morocco</option>
+                                    <option value="egypt">🇪🇬 Egypt</option>
+                                </select>
+                                <button class="btn-action primary" onclick="window.adminCreateQBank()">Create</button>
+                            </div>
+                            <div style="margin-bottom:20px;">
+                                <input type="text" id="admin-qbank-create-subcats" class="login-input" placeholder="Allowed sub-categories for this QBank (comma-separated, optional)" style="width:100%;">
+                            </div>
+                            <div id="admin-qbank-list" style="margin-bottom:30px; display:flex; flex-direction:column; gap:10px;"></div>
+                            <div id="admin-qbank-manage-area" style="display:none; margin-bottom:30px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                                    <div style="display:flex; align-items:center; gap:10px;">
+                                        <h3 id="admin-qbank-manage-title" style="color:#fff; margin:0;">Manage Questions</h3>
+                                        <button class="btn-dark-pill" style="padding:6px 12px; font-size:0.8rem; color:var(--accent-purple);" onclick="window.adminSelectBySubject()">Select by Subject</button>
+                                        <button class="btn-dark-pill" style="padding:6px 12px; font-size:0.8rem; color:var(--accent-cyan);" onclick="window.adminScanDuplicates()">Scan Duplicates</button>
+                                        <button class="btn-dark-pill" style="color:var(--danger); padding:6px 12px; font-size:0.8rem;" onclick="window.adminDeleteSelectedQBankQuestions()">Delete Selected</button>
+                                    </div>
+                                    <button class="btn-dark-pill" onclick="window.adminCloseManageQBank()">Back to QBanks</button>
+                                </div>
+                                <div id="admin-qbank-manage-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                            </div>
+                            
+                            <h3 style="color:#fff; margin-bottom:15px;">Add Question via AI</h3>
+                            <select id="admin-qbank-select" class="login-input" style="width:100%; margin-bottom:15px;">
+                                <option value="">Select QBank...</option>
+                            </select>
+                            <textarea id="admin-qbank-raw-input" class="login-input" rows="8" placeholder="Paste raw question text here..." style="width:100%; margin-bottom:15px; resize:vertical;"></textarea>
+                            <input type="text" id="admin-qbank-subcategories-input" class="login-input" placeholder="Allowed sub-categories (comma-separated, optional) e.g. Anatomie, Physiologie" style="width:100%; margin-bottom:15px;">
+                            <button class="btn-action primary" onclick="window.adminAddQBankQuestion()" style="width:100%; padding:12px;">Generate & Save Question</button>
+                            <div id="admin-qbank-add-status" style="margin-top:10px; color:var(--text-secondary); font-size:0.9rem;"></div>
+                        </div>
+                    </div>                    <div id="admin-panel-access" class="admin-tab-panel" style="display:none;">
+                       <h2 style="font-size:1.4rem; font-weight:800; color:var(--text-primary); margin-bottom:6px;">🔑 Access Requests</h2>
+                       <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:18px;">Students asking to open question banks outside their country. Accepting grants the bank and notifies the student.</p>
+                       <div id="admin-access-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                    </div>
+
+                    <div id="admin-panel-reports" class="admin-tab-panel" style="display:none;">
+                       <h2 style="font-size:1.4rem; font-weight:800; color:var(--text-primary); margin-bottom:20px;">Reported Questions</h2>
+                       <div id="admin-reports-content" style="display:flex; flex-direction:column; gap:12px;"></div>
+                    </div>
+                    <div id="admin-panel-examprep" class="admin-tab-panel" style="display:none;">
+                        <h2 style="font-size:1.4rem; font-weight:800; color:var(--text-primary); margin-bottom:6px;">Exam Prep Sub-Banks</h2>
+                        <p style="font-size:0.9rem; color:var(--text-secondary); margin:0 0 20px 0;">Standalone mini question-banks for past exams. They are managed exactly like regular qbanks (add/import questions, lock, resources) but appear only under the student <b>Exam Prep</b> tab — never in the main bank picker.</p>
+                        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:20px; margin-bottom:24px; display:flex; flex-direction:column; gap:12px;">
+                            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                <input type="text" id="admin-ep-name" class="login-input" placeholder="Sub-bank name (e.g. Residency Exam 2025)" style="flex:2; min-width:240px;">
+                                <select id="admin-ep-country" class="login-input" style="width:150px; cursor:pointer;">
+                                    <option value="global">🌍 Global</option>
+                                    <option value="usa">🇺🇸 USA</option>
+                                    <option value="uk">🇬🇧 UK</option>
+                                    <option value="australia">🇦🇺 Australia</option>
+                                    <option value="canada">🇨🇦 Canada</option>
+                                    <option value="india">🇮🇳 India</option>
+                                    <option value="europe">🇪🇺 Europe</option>
+                                    <option value="tunisia">🇹🇳 Tunisia</option>
+                                    <option value="algeria">🇩🇿 Algeria</option>
+                                    <option value="egypt">🇪🇬 Egypt</option>
+                                    <option value="morocco">🇲🇦 Morocco</option>
+                                </select>
+                            </div>
+                            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                <input type="text" id="admin-ep-college" class="login-input" placeholder="College / University (optional)" style="flex:2; min-width:220px;">
+                                <input type="text" id="admin-ep-year" class="login-input" placeholder="Year (optional)" style="width:130px;">
+                                <button class="btn-action primary" onclick="window.adminCreateExamPrep()" style="padding:10px 28px;">Create Sub-Bank</button>
+                            </div>
+                        </div>
+                        <h3 style="color:#fff; margin-bottom:12px;">Existing Exam Prep Banks</h3>
+                        <div id="admin-ep-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+                    </div>
+                    <div id="admin-panel-support" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-support-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <style>
+            .admin-tab.active { color:#fff !important; border-bottom-color: var(--accent-cyan) !important; }
+            .admin-tab:hover { color:#fff; }
+        </style>
+
+    </div> <!-- End of app-wrapper -->
+
+
+
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyD_gavsIcvvxe3inU4gSMxe9YRHoW2U9eA",
+            authDomain: "exora-web.firebaseapp.com",
+            projectId: "exora-web",
+            storageBucket: "exora-web.firebasestorage.app",
+            messagingSenderId: "294931423657",
+            appId: "1:294931423657:web:b440fdd5ce28c31bb6e4b8",
+            measurementId: "G-LTCWM5CPVE"
+        };
+        firebase.initializeApp(firebaseConfig);
+
+
+        const fsdb = firebase.firestore();
+        const auth = firebase.auth();
+        // Pin auth to LOCAL persistence so the session survives tab close.
+        try {
+            auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
+        } catch (_) {}
+
+        window.syncDbToCloud = async function (dbObj) {
+            const user = auth.currentUser;
+            if (!user) return;
+            try {
+                const cache = new Set();
+                const safeStr = JSON.stringify(dbObj, (key, value) => {
+                    if (key === 'access') return; // runtime-only; recomputed each session
+                    if (typeof value === 'object' && value !== null) {
+                        if (cache.has(value)) return;
+                        cache.add(value);
+                    }
+                    return value;
+                });
+                // Firestore has a 1MB per-document limit; store JSON string
+                await fsdb.collection('users').doc(user.uid).set({
+                    data: safeStr,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                const docCount = (dbObj.documents || []).length;
+                const flashcardCount = (dbObj.rems || []).filter(r => r.isFlashcard).length;
+                
+                await fsdb.collection('users_index').doc(user.uid).set({
+                    docCount: docCount,
+                    flashcardCount: flashcardCount
+                }, { merge: true });
+            } catch (e) {
+                console.error("Firestore sync error", e);
+                alert("Firestore Error: " + e.message + "\nYour Firestore rules might be blocking writes.");
+            }
+        };
+
+        window.loadDbFromCloud = async function () {
+            const user = auth.currentUser;
+            if (!user) return null;
+            try {
+                const snap = await fsdb.collection('users').doc(user.uid).get();
+                if (!snap.exists) return null;
+                const payload = snap.data();
+                if (payload && typeof payload.data === 'string') {
+                    try { return JSON.parse(payload.data); } catch { return null; }
+                }
+                // Backward compat: earlier writes may have stored the raw object
+                return payload && payload.data ? payload.data : null;
+            } catch (e) {
+                console.error("Firestore load error", e);
+                return null;
+            }
+        };
+
+    </script>
+
+
+        <!-- Scripts -->
+    <script src="js/i18n.js"></script>
+    <script src="js/ui-i18n.js"></script>
+    <script src="js/ai-client.js"></script>
+    <script src="js/session-restore.js"></script>
+    <script src="js/cloze.js"></script>
+
+    <script src="js/planner.js"></script>
+    <script src="js/app.js?v=2"></script>
+
+    <script src="js/srs.js"></script>
+    <script src="js/editor.js"></script>
+    <script src="js/pdf.js"></script>
+    <script src="js/ai.js"></script>
+    <script src="js/full-exam.js"></script>
+    <script src="js/summary.js"></script>
+    <script src="js/timer.js"></script>
+    <script src="js/schedule.js"></script>
+    <script src="js/draw.js"></script>
+    <script src="js/flashcards.js"></script>
+    <script src="js/deck-import.js?v=1"></script>
+    <script src="js/welcome.js?v=1"></script>
+    <script src="js/rich-render.js?v=4"></script>
+    <script src="js/rich-question-editor.js?v=5"></script>
+    <script src="js/admin.js?v=14"></script>
+    <script src="js/quotas.js"></script>
+    <script src="js/subscription.js"></script>
+    <script src="js/plan-gate.js"></script>
+    <script src="js/notifications.js"></script>
+    <script src="js/support.js"></script>
+    <script src="js/tour.js"></script>
+    <script src="js/whatsnew.js"></script>
+    <script src="js/import.js"></script>
+    <script src="js/focus-mode.js"></script>
+    <script src="js/book-mode.js?v=2"></script>
+    <script src="js/study-party.js?v=2"></script>
+    <script src="js/qbank-party.js?v=1"></script>
+    <script src="js/qbank.js?v=16"></script>
+
+    <script src="js/whiteboard.js"></script>
+    <script src="js/mindmap.js"></script>
+    <script src="js/recall.js"></script>
+    <script src="js/goals.js"></script>
+    <script src="js/radar.js"></script>
+    <script src="js/layout-polish.js"></script>
+    <script src="js/dashboard-ux.js"></script>
+    <script src="js/activity.js"></script>
+
+<script src="https://unpkg.com/lucide@0.454.0/dist/umd/lucide.min.js" integrity="sha384-m/CoPp6wBQz6MoZXP+VveuxfvSx0NGXiQyyakzXVOVHgG1fP5bM/UiO4pSNPV6PT" crossorigin="anonymous"></script>
+<script>
+    (function () {
+        let pointerIsDown = false;
+        let pendingIconRefresh = false;
+        let nativeCreateIcons = null;
+
+        function flushIcons() {
+            pendingIconRefresh = false;
+            if (nativeCreateIcons) nativeCreateIcons.call(window.lucide);
+        }
+
+        function requestIconRefresh() {
+            if (!window.lucide || !window.lucide.createIcons) return;
+            if (!nativeCreateIcons) installSafeCreateIcons();
+            window.lucide.createIcons();
+        }
+
+        function installSafeCreateIcons() {
+            if (!window.lucide || !window.lucide.createIcons || window.lucide.__omnoteClickSafe) return;
+            nativeCreateIcons = window.lucide.createIcons.bind(window.lucide);
+            window.lucide.createIcons = function () {
+                if (pointerIsDown) {
+                    pendingIconRefresh = true;
+                    return;
+                }
+                return nativeCreateIcons();
+            };
+            window.lucide.__omnoteClickSafe = true;
+        }
+
+        document.addEventListener('pointerdown', () => { pointerIsDown = true; }, true);
+        document.addEventListener('pointerup', () => {
+            pointerIsDown = false;
+            if (pendingIconRefresh) setTimeout(flushIcons, 80);
+        }, true);
+        document.addEventListener('pointercancel', () => {
+            pointerIsDown = false;
+            if (pendingIconRefresh) setTimeout(flushIcons, 80);
+        }, true);
+
+        function initIcons() { installSafeCreateIcons(); requestIconRefresh(); }
+        window.addEventListener('DOMContentLoaded', initIcons);
+        // Re-scan ONLY when an unresolved <i data-lucide> is added. Reacting to
+        // every mutation (including lucide's own <svg> replacements) rebuilt icons
+        // mid-click, cancelling the click event and forcing users to press buttons
+        // multiple times.
+        function hasUnresolvedIcon(node) {
+            if (!node || node.nodeType !== 1) return false;
+            if (node.tagName === 'I' && node.hasAttribute('data-lucide')) return true;
+            return !!(node.querySelector && node.querySelector('i[data-lucide]'));
+        }
+        const mo = new MutationObserver((records) => {
+            for (const r of records) {
+                for (const n of r.addedNodes) {
+                    if (hasUnresolvedIcon(n)) {
+                        clearTimeout(window.__lucideT);
+                        window.__lucideT = setTimeout(requestIconRefresh, 120);
+                        return;
+                    }
+                }
+            }
+        });
+        window.addEventListener('load', () => mo.observe(document.body, { childList: true, subtree: true }));
+    })();
+</script>
+</body>
+
+</html>
