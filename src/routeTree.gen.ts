@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ContactUsRouteImport } from './routes/contact-us'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as RefundPolicyRouteImport } from './routes/refund-policy'
 import { Route as TermsOfServiceRouteImport } from './routes/terms-of-service'
@@ -20,6 +21,7 @@ import { Route as ApiAiRouteImport } from './routes/api/ai'
 import { Route as ApiKashierRouteImport } from './routes/api/kashier'
 import { Route as ApiNotificationsRouteImport } from './routes/api/notifications'
 import { Route as ApiQbankRouteImport } from './routes/api/qbank'
+import { Route as ApiQbank_staticRouteImport } from './routes/api/qbank_static'
 import { Route as ApiSupportRouteImport } from './routes/api/support'
 import { Route as ApiPublicPeerStatsThresholdRouteImport } from './routes/api/public/peer-stats-threshold'
 import { Route as ApiPublicQbanksRouteImport } from './routes/api/public/qbanks'
@@ -36,6 +38,11 @@ const IndexRoute = IndexRouteImport.update({
 const ContactUsRoute = ContactUsRouteImport.update({
   id: '/contact-us',
   path: '/contact-us',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrivacyPolicyRoute = PrivacyPolicyRouteImport.update({
@@ -83,6 +90,11 @@ const ApiQbankRoute = ApiQbankRouteImport.update({
   path: '/api/qbank',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiQbank_staticRoute = ApiQbank_staticRouteImport.update({
+  id: '/api/qbank_static',
+  path: '/api/qbank_static',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSupportRoute = ApiSupportRouteImport.update({
   id: '/api/support',
   path: '/api/support',
@@ -124,6 +136,7 @@ const ApiPublicKashierWebhookRoute = ApiPublicKashierWebhookRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
+  '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/refund-policy': typeof RefundPolicyRoute
   '/terms-of-service': typeof TermsOfServiceRoute
@@ -133,6 +146,7 @@ export interface FileRoutesByFullPath {
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
   '/api/qbank': typeof ApiQbankRoute
+  '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
@@ -144,6 +158,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
+  '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/refund-policy': typeof RefundPolicyRoute
   '/terms-of-service': typeof TermsOfServiceRoute
@@ -153,6 +168,7 @@ export interface FileRoutesByTo {
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
   '/api/qbank': typeof ApiQbankRoute
+  '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
@@ -165,6 +181,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
+  '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/refund-policy': typeof RefundPolicyRoute
   '/terms-of-service': typeof TermsOfServiceRoute
@@ -174,6 +191,7 @@ export interface FileRoutesById {
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
   '/api/qbank': typeof ApiQbankRoute
+  '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
@@ -187,6 +205,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/contact-us'
+    | '/onboarding'
     | '/privacy-policy'
     | '/refund-policy'
     | '/terms-of-service'
@@ -196,6 +215,7 @@ export interface FileRouteTypes {
     | '/api/kashier'
     | '/api/notifications'
     | '/api/qbank'
+    | '/api/qbank_static'
     | '/api/support'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
@@ -207,6 +227,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/contact-us'
+    | '/onboarding'
     | '/privacy-policy'
     | '/refund-policy'
     | '/terms-of-service'
@@ -216,6 +237,7 @@ export interface FileRouteTypes {
     | '/api/kashier'
     | '/api/notifications'
     | '/api/qbank'
+    | '/api/qbank_static'
     | '/api/support'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
@@ -227,6 +249,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/contact-us'
+    | '/onboarding'
     | '/privacy-policy'
     | '/refund-policy'
     | '/terms-of-service'
@@ -236,6 +259,7 @@ export interface FileRouteTypes {
     | '/api/kashier'
     | '/api/notifications'
     | '/api/qbank'
+    | '/api/qbank_static'
     | '/api/support'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
@@ -248,6 +272,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ContactUsRoute: typeof ContactUsRoute
+  OnboardingRoute: typeof OnboardingRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
   RefundPolicyRoute: typeof RefundPolicyRoute
   TermsOfServiceRoute: typeof TermsOfServiceRoute
@@ -257,6 +282,7 @@ export interface RootRouteChildren {
   ApiKashierRoute: typeof ApiKashierRoute
   ApiNotificationsRoute: typeof ApiNotificationsRoute
   ApiQbankRoute: typeof ApiQbankRoute
+  ApiQbank_staticRoute: typeof ApiQbank_staticRoute
   ApiSupportRoute: typeof ApiSupportRoute
   ApiPublicPeerStatsThresholdRoute: typeof ApiPublicPeerStatsThresholdRoute
   ApiPublicQbanksRoute: typeof ApiPublicQbanksRoute
@@ -280,6 +306,13 @@ declare module '@tanstack/react-router' {
       path: '/contact-us'
       fullPath: '/contact-us'
       preLoaderRoute: typeof ContactUsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/privacy-policy': {
@@ -345,6 +378,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiQbankRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/qbank_static': {
+      id: '/api/qbank_static'
+      path: '/api/qbank_static'
+      fullPath: '/api/qbank_static'
+      preLoaderRoute: typeof ApiQbank_staticRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/support': {
       id: '/api/support'
       path: '/api/support'
@@ -400,6 +440,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ContactUsRoute: ContactUsRoute,
+  OnboardingRoute: OnboardingRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
   RefundPolicyRoute: RefundPolicyRoute,
   TermsOfServiceRoute: TermsOfServiceRoute,
@@ -409,6 +450,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiKashierRoute: ApiKashierRoute,
   ApiNotificationsRoute: ApiNotificationsRoute,
   ApiQbankRoute: ApiQbankRoute,
+  ApiQbank_staticRoute: ApiQbank_staticRoute,
   ApiSupportRoute: ApiSupportRoute,
   ApiPublicPeerStatsThresholdRoute: ApiPublicPeerStatsThresholdRoute,
   ApiPublicQbanksRoute: ApiPublicQbanksRoute,

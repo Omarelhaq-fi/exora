@@ -4,6 +4,7 @@ import { getCorsHeaders } from "@/lib/cors";
 import { routeRequest } from "@/lib/ai-router.server";
 import { getClientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit.server";
 import { ensureQIndex, qindexLookup, normRef } from "@/lib/qindex.server";
+import { gunzipSync } from "node:zlib";
 
 let cachedQbanksList: any = null;
 let cachedQbanksListTime = 0;
@@ -402,10 +403,17 @@ export const Route = createFileRoute("/api/qbank")({
                      const dataStr = doc.fields?.data?.stringValue;
                      if (dataStr) {
                         try {
-                          const parsedChunk = JSON.parse(dataStr);
+                          let parsedChunk;
+                          if (dataStr.trim().startsWith("[")) {
+                            parsedChunk = JSON.parse(dataStr);
+                          } else {
+                            const buf = Buffer.from(dataStr, 'base64');
+                            const rawJson = gunzipSync(buf).toString('utf-8');
+                            parsedChunk = JSON.parse(rawJson);
+                          }
                           questions.push(...parsedChunk);
                         } catch (e) {
-                          console.error("Failed to parse chunk", doc.name);
+                          console.error("Failed to parse chunk", doc.name, e);
                         }
                      }
                   }

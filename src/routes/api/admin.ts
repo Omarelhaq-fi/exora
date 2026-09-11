@@ -3,6 +3,7 @@
 // through this route so no client-SDK read ever touches admin documents.
 
 import { createFileRoute } from "@tanstack/react-router";
+import { gzipSync } from "node:zlib";
 import {
   verifyFirebaseIdToken,
   getServiceAccount,
@@ -1268,7 +1269,7 @@ export const Route = createFileRoute("/api/admin")({
             }
 
             // 3. Write new chunks
-            const chunkSize = 500;
+            const chunkSize = 2000;
             const chunks: any[] = [];
             for (let i = 0; i < questions.length; i += chunkSize) {
               chunks.push(questions.slice(i, i + chunkSize));
@@ -1276,13 +1277,16 @@ export const Route = createFileRoute("/api/admin")({
 
             for (let i = 0; i < chunks.length; i++) {
                const chunkUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/chunks/chunk_${i}`;
+               const rawJson = JSON.stringify(chunks[i]);
+               const compressedStr = gzipSync(Buffer.from(rawJson, 'utf-8')).toString('base64');
+               
                const chunkResp = await fetch(chunkUrl, {
                  method: "PATCH",
                  headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
                  body: JSON.stringify({
                    fields: {
                      index: { integerValue: String(i) },
-                     data: { stringValue: JSON.stringify(chunks[i]) },
+                     data: { stringValue: compressedStr },
                      timestamp: { timestampValue: new Date().toISOString() }
                    }
                  })
@@ -1847,17 +1851,20 @@ Text to process:\n${body.rawText}`
 
               // Write new chunks from remaining questions
               const newChunks: any[] = [];
-              for (let i = 0; i < remaining.length; i += 500) {
-                newChunks.push(remaining.slice(i, i + 500));
+              const chunkSize = 2000;
+              for (let i = 0; i < remaining.length; i += chunkSize) {
+                newChunks.push(remaining.slice(i, i + chunkSize));
               }
               for (let i = 0; i < newChunks.length; i++) {
+                const rawJson = JSON.stringify(newChunks[i]);
+                const compressedStr = gzipSync(Buffer.from(rawJson, 'utf-8')).toString('base64');
                 await fetch(`https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${body.qbankId}/chunks/chunk_${i}`, {
                   method: "PATCH",
                   headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
                   body: JSON.stringify({
                     fields: {
                       index: { integerValue: String(i) },
-                      data: { stringValue: JSON.stringify(newChunks[i]) },
+                      data: { stringValue: compressedStr },
                       timestamp: { timestampValue: new Date().toISOString() }
                     }
                   })
