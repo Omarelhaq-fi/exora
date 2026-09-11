@@ -396,14 +396,11 @@ function _loadQBankFromCache(qbankId) {
                     }
                 }
                 
-                // Fallback: fetch from API
-                const token = window.firebase && firebase.auth().currentUser ? 
-                    await firebase.auth().currentUser.getIdToken() : null;
-                if (!token) throw new Error("Not signed in");
-                
-                const res = await fetch(`/api/qbank?action=get_questions&qbankId=${encodeURIComponent(qbankId)}`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+                // Fallback: fetch from CDN static endpoint (cacheable by Vercel Edge)
+                const qCat = (window.cachedCategories || []).find(c => c.id === qbankId);
+                const catUpdated = qCat ? (qCat.updatedAt || 0) : 0;
+
+                const res = await fetch(`/api/qbank_static?qbankId=${encodeURIComponent(qbankId)}&v=${encodeURIComponent(catUpdated)}`);
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || "API error");
                 
@@ -422,12 +419,10 @@ function _loadQBankFromCache(qbankId) {
                 
                 // Save to IndexedDB for next time
                 if (window.setCachedQBank) {
-                    const qCat = (window.cachedCategories || []).find(c => c.id === qbankId);
-                    const catUpdated = qCat ? qCat.updatedAt : 0;
-                    window.setCachedQBank(qbankId, { updatedAt: catUpdated, questions: data.questions || [] });
+                    window.setCachedQBank(qbankId, { updatedAt: catUpdated, questions });
                 }
                 
-                return data.questions || [];
+                return questions;
             } catch (e) {
                 throw e;
             }

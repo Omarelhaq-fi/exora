@@ -585,12 +585,33 @@
              const catUpdated = activeQBankMeta.updatedAt || 0;
              const idbData = await getCachedQBank(activeQBankId);
              if (idbData && idbData.updatedAt === catUpdated && idbData.questions && idbData.questions.length > 0) {
+                 // Questions are fresh in IndexedDB — only fetch progress (tiny, private)
                  const res = await apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true });
                  cachedQBanks[activeQBankId] = { questions: idbData.questions, progress: applyLocalQueueProgress(activeQBankId, res.progress || {}) };
              } else {
-                 const res = await apiGet("get_questions", { qbankId: activeQBankId });
-                 cachedQBanks[activeQBankId] = { questions: res.questions || [], progress: applyLocalQueueProgress(activeQBankId, res.progress || {}) };
-                 setCachedQBank(activeQBankId, { updatedAt: catUpdated, questions: res.questions || [] });
+                 // Questions outdated or missing — download from CDN static endpoint
+                 // (no Auth header = Vercel Edge CDN will cache this globally)
+                 const [staticRes, progressRes] = await Promise.all([
+                   (async () => {
+                     const r = await fetch(`/api/qbank_static?qbankId=${encodeURIComponent(activeQBankId)}&v=${encodeURIComponent(catUpdated)}`);
+                     const d = await r.json();
+                     if (!r.ok) throw new Error(d.error || 'CDN fetch failed');
+                     let questions = d.questions || [];
+                     if (d.encryptedQuestions && window.decryptDRM) {
+                       try {
+                         const jsonStr = await window.decryptDRM(d.encryptedQuestions);
+                         questions = JSON.parse(jsonStr);
+                       } catch(e) { console.error('DRM decryption failed', e); }
+                     }
+                     return questions;
+                   })(),
+                   apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true })
+                 ]);
+                 const questions = staticRes;
+                 const progress = progressRes.progress || {};
+                 cachedQBanks[activeQBankId] = { questions, progress: applyLocalQueueProgress(activeQBankId, progress) };
+                 // Persist to IndexedDB so next visit is instant
+                 setCachedQBank(activeQBankId, { updatedAt: catUpdated, questions });
              }
          } catch (e) {
              console.error("Failed to load bank data", e);
@@ -1284,9 +1305,11 @@
       if (window.renderDashboardPlannerWidget) window.renderDashboardPlannerWidget();
 
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+      if (window.hideGlobalLoader) window.hideGlobalLoader();
       
     } catch (e) {
       area.innerHTML = `<div style="padding:40px;text-align:center;color:var(--danger);">Failed to load QBanks: ${e.message}</div>`;
+      if (window.hideGlobalLoader) window.hideGlobalLoader();
     }
   };
 
@@ -1642,7 +1665,7 @@
         const globalScoreUI = getScoreDisplay(totalCorrect, totalAns);
 
         // Show subject selection (extracted renderer)
-        window.showQBankSubjects();
+        window.showQBankSubjects(qbankId);
       }
 
     } catch (e) {
@@ -1681,7 +1704,7 @@
     if (s.includes("cas clinique") || s.includes("clinical")) return { icon: "clipboard-list", color, bg };
     return { icon: "book-open", color, bg };
   };
-  window.showQBankSubjects = async function() {
+  window.showQBankSubjects = async function(requestedQBankId = null) {
       // 1. Switch active view to qbank-home-view
       if (window.hideAllMainViews) window.hideAllMainViews();
       const view = document.getElementById("qbank-home-view");
@@ -1701,7 +1724,7 @@
       const area = document.getElementById("qbank-home-content");
       if (!area) return;
       
-      const activeQBankId = window.db && window.db.selectedQBankId;
+      const activeQBankId = requestedQBankId || currentQBankId || (window.db && window.db.selectedQBankId);
       if (!activeQBankId) { window.openQBank(); return; }
 
       // Make sure the QBank data is loaded
@@ -1720,7 +1743,7 @@
           </div>`;
           await window.openQBank(activeQBankId); 
           // openQBank will load the questions and overwrite the HTML, so we must call showQBankSubjects again
-          setTimeout(window.showQBankSubjects, 100);
+          setTimeout(() => window.showQBankSubjects(activeQBankId), 100);
           return;
       }
 
