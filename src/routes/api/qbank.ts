@@ -5,13 +5,174 @@ import { routeRequest } from "@/lib/ai-router.server";
 import { getClientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit.server";
 import { ensureQIndex, qindexLookup, normRef } from "@/lib/qindex.server";
 import { gunzipSync } from "node:zlib";
-
-let cachedQbanksList: any = null;
-let cachedQbanksListTime = 0;
-let cachedAllBanks: any = null;
-let cachedAllBanksTime = 0;
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
 import { dbStats } from "@/lib/firebase.server";
+import {
+  getQbankListCache,
+  setQbankListCache,
+  findCachedQbankMeta,
+  getCachedUserProfile,
+  setCachedUserProfile,
+  invalidateUserProfile,
+  type QbankListEntry,
+} from "@/lib/qbank-cache.server";
+
+// Fetch + cache the caller's users_index profile (country + qbankGrants).
+// 60s per-user TTL avoids a Firestore read on every dashboard navigation.
+async function fetchUserProfileFresh(
+  sa: { project_id: string },
+  token: string,
+  uid: string,
+): Promise<{ country: string; grants: string[] }> {
+  const uRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}`;
+  const uRes = await fetch(uRef, { headers: { Authorization: `Bearer ${token}` } });
+  let country = "";
+  let grants: string[] = [];
+  if (uRes.ok) {
+    const ud = await uRes.json();
+    country = String(ud.fields?.country?.stringValue || "").toLowerCase();
+    const gv = ud.fields?.qbankGrants?.arrayValue?.values || [];
+    grants = gv.map((v: any) => String(v.stringValue || "")).filter(Boolean);
+  }
+  const profile = { country, grants };
+  setCachedUserProfile(uid, profile);
+  return profile;
+}
+
+async function loadUserProfile(
+  sa: { project_id: string },
+  token: string,
+  uid: string,
+): Promise<{ country: string; grants: string[] }> {
+  const cached = getCachedUserProfile(uid);
+  if (cached) return cached;
+  return fetchUserProfileFresh(sa, token, uid);
+}
+
+// Single access rule shared by every endpoint: legacy (no-country) accounts
+// bypass; otherwise same-country banks open, and an admin grant
+// (request_access approval) unlocks that bank regardless of kind — matching
+// what the client UI already promises on the bank cards.
+function bankAccessAllowed(
+  profile: { country: string; grants: string[] },
+  meta: { country: string; kind: string },
+  qbankId: string,
+): boolean {
+  if (!profile.country) return true; // legacy
+  if (profile.grants.includes(qbankId)) return true;
+  return meta.country.toLowerCase() === profile.country;
+}
+
+interface BankAccessResult {
+  ok: boolean;
+  status: 200 | 403 | 404;
+  profile: { country: string; grants: string[] };
+  meta: { country: string; kind: string } | null;
+}
+
+// Resolve access for one bank: metadata from the shared list cache (0 reads
+// when warm, single-doc fallback on cold cache). On DENY, does exactly one
+// fresh profile read before giving up — covers the race where a grant was
+// approved seconds ago or cached on another isolate.
+async function resolveBankAccess(
+  sa: { project_id: string },
+  token: string,
+  uid: string,
+  qbankId: string,
+): Promise<BankAccessResult> {
+  let profile = await loadUserProfile(sa, token, uid);
+  const hit = findCachedQbankMeta(qbankId);
+  let meta: { country: string; kind: string } | null = hit
+    ? { country: hit.country, kind: hit.kind }
+    : null;
+  if (!meta && !getQbankListCache()) {
+    const bRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
+    const bRes = await fetch(bRef, { headers: { Authorization: `Bearer ${token}` } });
+    if (bRes.ok) {
+      const bd = await bRes.json();
+      meta = {
+        country: String(bd.fields?.country?.stringValue || "global"),
+        kind: String(bd.fields?.kind?.stringValue || "main"),
+      };
+    }
+  }
+  if (!meta) return { ok: false, status: 404, profile, meta: null };
+  if (bankAccessAllowed(profile, meta, qbankId)) {
+    return { ok: true, status: 200, profile, meta };
+  }
+  // Stale-cache retry: drop the cached profile and read it fresh once.
+  invalidateUserProfile(uid);
+  profile = await fetchUserProfileFresh(sa, token, uid);
+  if (bankAccessAllowed(profile, meta, qbankId)) {
+    return { ok: true, status: 200, profile, meta };
+  }
+  return { ok: false, status: 403, profile, meta };
+}
+
+// Fetch + cache the full qbank metadata list (shared with bootstrap_access).
+async function loadAllBanks(
+  sa: { project_id: string },
+  token: string,
+): Promise<QbankListEntry[]> {
+  const cached = getQbankListCache();
+  if (cached) return cached.banks;
+
+  // 1 read: fetch the pre-built index document written by Admin on every change.
+  // If it doesn't exist yet (first deploy), fall back to the full collection query.
+  const indexUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/sys/qbank_index`;
+  const indexRes = await fetch(indexUrl, { headers: { Authorization: `Bearer ${token}` } });
+
+  if (indexRes.ok) {
+    const indexData = await indexRes.json();
+    const jsonStr = indexData.fields?.data?.stringValue;
+    if (jsonStr) {
+      try {
+        const qbanks: QbankListEntry[] = JSON.parse(jsonStr);
+        setQbankListCache(qbanks);
+        return qbanks;
+      } catch(e) {
+        console.error("[loadAllBanks] Failed to parse qbank_index:", e);
+      }
+    }
+  }
+
+  // Fallback: full collection query (used before the first Admin action builds the index)
+  const qbanks: QbankListEntry[] = [];
+  let pageToken = "";
+  while (true) {
+    const params = new URLSearchParams({ pageSize: "300" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const listRes = await fetch(
+      `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks?${params}`,
+      { method: "GET", headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!listRes.ok && listRes.status !== 404) throw new Error("Failed to load qbanks");
+    if (listRes.status === 404) break;
+    const data = await listRes.json();
+    if (data && Array.isArray(data.documents)) {
+      for (const doc of data.documents) {
+        const id = doc.name.split("/").pop();
+        const name = doc.fields?.name?.stringValue || id;
+        const country = doc.fields?.country?.stringValue || "global";
+        const updatedAtStr = doc.fields?.updatedAt?.integerValue || doc.fields?.updatedAt?.doubleValue;
+        const updatedAt = updatedAtStr ? parseInt(String(updatedAtStr), 10) : 0;
+        const isLocked = doc.fields?.isLocked?.booleanValue || doc.fields?.isLocked?.stringValue === "true" || false;
+        const isPartyLocked = doc.fields?.isPartyLocked?.booleanValue || doc.fields?.isPartyLocked?.stringValue === "true" || false;
+        let resources = [];
+        try { resources = JSON.parse(doc.fields?.resources?.stringValue || "[]"); } catch(e) {}
+        const kind = doc.fields?.kind?.stringValue || "main";
+        const college = doc.fields?.college?.stringValue || "";
+        const year = doc.fields?.year?.stringValue || "";
+        qbanks.push({ id, name, country, updatedAt, isLocked, isPartyLocked, resources, kind, college, year });
+      }
+    }
+    pageToken = data.nextPageToken || "";
+    if (!pageToken) break;
+  }
+  setQbankListCache(qbanks);
+  return qbanks;
+}
 
 const DRM_KEY_STR = process.env.DRM_KEY || "8f7e6d5c4b3a29108f7e6d5c4b3a2910";
 async function encryptDRM(text: string) {
@@ -100,52 +261,29 @@ export const Route = createFileRoute("/api/qbank")({
           if (!userLimit.ok) return rateLimitResponse(userLimit.retryAfter, cors);
 
           if (action === "list_categories") {
-            if (cachedQbanksList && Date.now() - cachedQbanksListTime < 10 * 60_000) {
-              return json({ qbanks: cachedQbanksList }, 200, cors);
-            }
-
-            const qbanks: any[] = [];
-            let pageToken = "";
-            while (true) {
-              const params = new URLSearchParams({ pageSize: "300" });
-              if (pageToken) params.set("pageToken", pageToken);
-              const listRes = await fetch(
-                `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks?${params}`,
-                {
-                  method: "GET",
-                  headers: { Authorization: `Bearer ${token}` }
+            // Version-aware cache: the list lives in memory until an admin
+            // publish bumps a bank's `updatedAt` (which invalidates it).
+            // Clients send their known maxUpdatedAt as `?v=`; a match means
+            // "unchanged" with ZERO Firestore reads.
+            const clientV = parseInt(urlObj.searchParams.get("v") || "0", 10) || 0;
+            try {
+              const cached = getQbankListCache();
+              if (cached) {
+                if (clientV && clientV === cached.maxUpdatedAt) {
+                  return json({ unchanged: true, maxUpdatedAt: cached.maxUpdatedAt }, 200, cors);
                 }
-              );
-              
-              if (!listRes.ok && listRes.status !== 404) return json({ error: "Failed to load qbanks" }, 500, cors);
-              if (listRes.status === 404) break;
-              
-              const data = await listRes.json();
-              if (data && Array.isArray(data.documents)) {
-                for (const doc of data.documents) {
-                  const id = doc.name.split("/").pop();
-                  const name = doc.fields?.name?.stringValue || id;
-                  const country = doc.fields?.country?.stringValue || "global";
-                  const updatedAtStr = doc.fields?.updatedAt?.integerValue || doc.fields?.updatedAt?.doubleValue;
-                  const updatedAt = updatedAtStr ? parseInt(String(updatedAtStr), 10) : 0;
-                  const isLocked = doc.fields?.isLocked?.booleanValue || doc.fields?.isLocked?.stringValue === "true" || false;
-                  const isPartyLocked = doc.fields?.isPartyLocked?.booleanValue || doc.fields?.isPartyLocked?.stringValue === "true" || false;
-                  let resources = [];
-                  try { resources = JSON.parse(doc.fields?.resources?.stringValue || "[]"); } catch(e) {}
-                  const kind = doc.fields?.kind?.stringValue || "main";
-                  const college = doc.fields?.college?.stringValue || "";
-                  const year = doc.fields?.year?.stringValue || "";
-                  qbanks.push({ id, name, country, updatedAt, isLocked, isPartyLocked, resources, kind, college, year });
-                }
+                return json({ qbanks: cached.banks, maxUpdatedAt: cached.maxUpdatedAt, cached: true }, 200, cors);
               }
-              pageToken = data.nextPageToken || "";
-              if (!pageToken) break;
+              const qbanks = await loadAllBanks(sa, token);
+              const fresh = getQbankListCache();
+              const maxUpdatedAt = fresh ? fresh.maxUpdatedAt : 0;
+              if (clientV && clientV === maxUpdatedAt) {
+                return json({ unchanged: true, maxUpdatedAt }, 200, cors);
+              }
+              return json({ qbanks, maxUpdatedAt }, 200, cors);
+            } catch {
+              return json({ error: "Failed to load qbanks" }, 500, cors);
             }
-            
-            cachedQbanksList = qbanks;
-            cachedQbanksListTime = Date.now();
-
-            return json({ qbanks }, 200, cors);
           }
 
           if (action === "list_exam_prep") {
@@ -190,56 +328,24 @@ export const Route = createFileRoute("/api/qbank")({
             // Returns the caller's profile country, the main qbanks of that
             // country, the exam-prep sub-banks of that country, plus any
             // individually granted banks (admin-approved requests).
-            const uRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}`;
-            const uRes = await fetch(uRef, { headers: { Authorization: `Bearer ${token}` } });
-            let country = "";
-            let grants: string[] = [];
-            if (uRes.ok) {
-              const ud = await uRes.json();
-              country = String(ud.fields?.country?.stringValue || "").toLowerCase();
-              const gv = ud.fields?.qbankGrants?.arrayValue?.values || [];
-              grants = gv.map((v: any) => String(v.stringValue || "")).filter(Boolean);
-            }
+            // Profile is cached 60s per user; bank metadata comes from the
+            // shared publish-invalidated list cache (0 reads when warm).
+            const { country, grants } = await loadUserProfile(sa, token, uid);
 
-            // Load all banks (metadata)
-            let allBanks: { id: string; country: string; kind: string }[] = [];
-            
-            if (cachedAllBanks && Date.now() - cachedAllBanksTime < 10 * 60_000) {
-              allBanks = cachedAllBanks;
-            } else {
-              let bpt = "";
-              while (true) {
-                const bp = new URLSearchParams({ pageSize: "300" });
-                if (bpt) bp.set("pageToken", bpt);
-                const br = await fetch(
-                  `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks?${bp}`,
-                  { headers: { Authorization: `Bearer ${token}` } }
-                );
-                if (!br.ok || br.status === 404) break;
-                const bd = await br.json();
-                for (const d of bd.documents || []) {
-                  allBanks.push({
-                    id: d.name.split("/").pop(),
-                    country: String(d.fields?.country?.stringValue || "global").toLowerCase(),
-                    kind: String(d.fields?.kind?.stringValue || "main"),
-                  });
-                }
-                bpt = bd.nextPageToken || "";
-                if (!bpt) break;
-              }
-              cachedAllBanks = allBanks;
-              cachedAllBanksTime = Date.now();
-            }
+            // Load all banks (metadata). Degrade to empty lists (not 500)
+            // if the bank listing is unreachable — same as before caching.
+            const allBanks = await loadAllBanks(sa, token).catch(() => []);
 
             // Legacy/admin accounts have no country on file -> full access
             // (gating only applies to accounts created AFTER country selection)
             const legacy = !country;
+            const bankCountry = (b: { country: string }) => String(b.country || "global").toLowerCase();
             const mainIds = legacy
               ? allBanks.filter(b => b.kind !== "exam_prep").map(b => b.id)
-              : allBanks.filter(b => b.kind !== "exam_prep" && b.country === country).map(b => b.id);
+              : allBanks.filter(b => b.kind !== "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
             const prepIds = legacy
               ? allBanks.filter(b => b.kind === "exam_prep").map(b => b.id)
-              : allBanks.filter(b => b.kind === "exam_prep" && (b.country === country || grants.includes(b.id))).map(b => b.id);
+              : allBanks.filter(b => b.kind === "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
 
             return json({ profileCountry: country, mainIds, prepIds, grants, legacy }, 200, cors);
           }
@@ -259,42 +365,13 @@ export const Route = createFileRoute("/api/qbank")({
             const candidates = qindexLookup(rawRef);
             if (candidates.length === 0) return json({ question: null, matches: 0 }, 404, cors);
 
-            // Access Check Initialization
-            let userCountry = "";
-            let userGrants: string[] = [];
-            let isLegacy = false;
-            
-            const uRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}`;
-            const uRes = await fetch(uRef, { headers: { Authorization: `Bearer ${token}` } });
-            if (uRes.ok) {
-              const ud = await uRes.json();
-              userCountry = String(ud.fields?.country?.stringValue || "").toLowerCase();
-              const gv = ud.fields?.qbankGrants?.arrayValue?.values || [];
-              userGrants = gv.map((v: any) => String(v.stringValue || "")).filter(Boolean);
-            }
-            isLegacy = !userCountry;
-
             const validId = (x: string) => /^[a-zA-Z0-9_-]+$/.test(x);
             const fetchDoc = async (bid: string, qid: string) => {
               if (!validId(bid) || !validId(qid)) return null;
 
-              // Access Verification Check
-              const bRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${bid}`;
-              const bRes = await fetch(bRef, { headers: { Authorization: `Bearer ${token}` } });
-              if (!bRes.ok) return null;
-              const bd = await bRes.json();
-              const bCountry = String(bd.fields?.country?.stringValue || "global").toLowerCase();
-              const bKind = String(bd.fields?.kind?.stringValue || "main");
-
-              let hasAccess = isLegacy;
-              if (!hasAccess) {
-                if (bKind !== "exam_prep") {
-                  hasAccess = (bCountry === userCountry);
-                } else {
-                  hasAccess = (bCountry === userCountry) || userGrants.includes(bid);
-                }
-              }
-              if (!hasAccess) return null;
+              // Access Verification Check (grants unlock any kind of bank)
+              const access = await resolveBankAccess(sa, token, uid, bid);
+              if (!access.ok) return null;
 
               const r = await fetch(
                 `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${bid}/questions/${qid}`,
@@ -337,44 +414,63 @@ export const Route = createFileRoute("/api/qbank")({
             // Validate alphanumeric to prevent basic injection, though it's just a path param
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
 
-            // Security: Verify user has access to this QBank
-            const uRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}`;
-            const uRes = await fetch(uRef, { headers: { Authorization: `Bearer ${token}` } });
-            let userCountry = "";
-            let userGrants: string[] = [];
-            if (uRes.ok) {
-              const ud = await uRes.json();
-              userCountry = String(ud.fields?.country?.stringValue || "").toLowerCase();
-              const gv = ud.fields?.qbankGrants?.arrayValue?.values || [];
-              userGrants = gv.map((v: any) => String(v.stringValue || "")).filter(Boolean);
+            // Security: Verify user has access to this QBank.
+            // Profile (60s cache) + bank metadata (shared list cache) = 0
+            // reads when warm; only the progress blob below costs a read.
+            // Security: Verify user has access to this QBank (profile 60s
+            // cache + shared bank metadata; exactly one fresh profile read
+            // before giving up, so a just-approved grant is never missed).
+            const access = await resolveBankAccess(sa, token, uid, qbankId);
+            if (!access.ok && access.status === 404) {
+              return json({ error: "QBank not found" }, 404, cors);
             }
-            const isLegacy = !userCountry;
-
-            const bRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
-            const bRes = await fetch(bRef, { headers: { Authorization: `Bearer ${token}` } });
-            if (!bRes.ok) return json({ error: "QBank not found" }, 404, cors);
-            const bd = await bRes.json();
-            const bCountry = String(bd.fields?.country?.stringValue || "global").toLowerCase();
-            const bKind = String(bd.fields?.kind?.stringValue || "main");
-
-            let hasAccess = isLegacy;
-            if (!hasAccess) {
-              if (bKind !== "exam_prep") {
-                hasAccess = (bCountry === userCountry);
-              } else {
-                hasAccess = (bCountry === userCountry) || userGrants.includes(qbankId);
-              }
-            }
-
-            if (!hasAccess) {
-              return json({ error: "Forbidden: You do not have access to this QBank." }, 403, cors);
+            if (!access.ok) {
+              return json({
+                error: "Forbidden: You do not have access to this QBank.",
+                detail: {
+                  bankKind: access.meta?.kind || "unknown",
+                  bankCountry: access.meta?.country || "unknown",
+                  profileCountry: access.profile.country || "(none)",
+                  grantListed: access.profile.grants.includes(qbankId),
+                },
+              }, 403, cors);
             }
 
             const questions: any[] = [];
             
             if (!onlyProgress) {
-              // 1. Try fetching from chunks
+              const storageProvider = access.meta?.storage_provider;
               let fetchedFromChunks = false;
+
+              if (storageProvider === "r2") {
+                const s3Client = new S3Client({
+                  region: "auto",
+                  endpoint: process.env.R2_ENDPOINT!,
+                  forcePathStyle: true,
+                  credentials: {
+                    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+                    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+                  },
+                });
+                try {
+                  const objRes = await s3Client.send(new GetObjectCommand({
+                    Bucket: process.env.R2_BUCKET_NAME || "curaq",
+                    Key: `qbanks/${qbankId}/chunks.json.gz`,
+                  }));
+                  const bytes = await objRes.Body?.transformToByteArray();
+                  if (bytes) {
+                    const rawJson = gunzipSync(bytes).toString('utf-8');
+                    const parsed = JSON.parse(rawJson);
+                    questions.push(...parsed);
+                    fetchedFromChunks = true;
+                  }
+                } catch (e) {
+                  console.error("Failed to fetch chunks from R2", e);
+                }
+              }
+
+              // 1. Try fetching from Firestore chunks (if not already fetched from R2)
+              if (!fetchedFromChunks) {
               let chunkToken = "";
               const allChunks: any[] = [];
               while (true) {
@@ -417,6 +513,7 @@ export const Route = createFileRoute("/api/qbank")({
                         }
                      }
                   }
+              }
               }
 
               // 2. Fallback to fetching individual questions if no chunks exist
@@ -503,10 +600,11 @@ export const Route = createFileRoute("/api/qbank")({
               { headers: { Authorization: `Bearer ${token}` } }
             );
             
-            if (!r.ok) return json({ studyConcept: null }, 200, cors);
+            if (!r.ok) return json({ studyConcept: null, studyConceptLang: null }, 200, cors);
             const doc = await r.json();
             const studyConcept = doc.fields?.studyConcept?.stringValue || null;
-            return json({ studyConcept }, 200, cors);
+            const studyConceptLang = doc.fields?.studyConceptLang?.stringValue || null;
+            return json({ studyConcept, studyConceptLang }, 200, cors);
           }
 
           return json({ error: "Invalid action" }, 400, cors);
@@ -800,10 +898,25 @@ export const Route = createFileRoute("/api/qbank")({
                 return json({ error: "Missing context or message" }, 400, cors);
              }
 
+             // Answer in the student's language (explicit choice, or "auto"
+             // = match the question's own language). Otherwise the tutor
+             // defaults to English even for French questions.
+             let chatLang: string | undefined;
+             if (typeof body.lang === "string" && /^[a-zA-Z-]{2,8}$/.test(body.lang)) {
+               chatLang = body.lang.slice(0, 8);
+             }
+             let langSuffix = "";
+             if (chatLang) {
+               try {
+                 const { langInstruction } = await import("@/lib/prompt-registry.server");
+                 langSuffix = langInstruction(chatLang);
+               } catch { /* non-fatal: answer without language pinning */ }
+             }
+
              const messages = [
                {
                  role: "system",
-                 content: "You are an expert medical AI tutor. The user is asking a follow-up question about a specific exam question they just reviewed. Be helpful, concise, and explain concepts clearly. Use markdown formatting.\n\nIMPORTANT: Do NOT output your internal thinking process or any <think> tags. Just output the final response.\n\nHere is the question context:\n" + body.questionContext
+                 content: "You are an expert medical AI tutor. The user is asking a follow-up question about a specific exam question they just reviewed. Be helpful, concise, and explain concepts clearly. Use markdown formatting.\n\nIMPORTANT: Do NOT output your internal thinking process or any <think> tags. Just output the final response." + langSuffix + "\n\nHere is the question context:\n" + body.questionContext
                },
                {
                  role: "user",
@@ -932,17 +1045,25 @@ export const Route = createFileRoute("/api/qbank")({
             const { qbankId, questionId, studyConcept } = body;
             if (!qbankId || !questionId || !studyConcept) return json({ error: "Missing fields" }, 400, cors);
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId) || !/^[a-zA-Z0-9_-]+$/.test(questionId)) return json({ error: "Invalid ids" }, 400, cors);
+            // Generation language tag so future readers get content in
+            // their own language instead of a stale English copy.
+            const conceptLang = typeof body.lang === "string" && /^[a-zA-Z-]{2,8}$/.test(body.lang)
+              ? body.lang.slice(0, 8) : null;
 
-            const docUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/questions/${questionId}?updateMask.fieldPaths=studyConcept`;
-            
+            const mask = conceptLang
+              ? "updateMask.fieldPaths=studyConcept&updateMask.fieldPaths=studyConceptLang"
+              : "updateMask.fieldPaths=studyConcept";
+            const docUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/questions/${questionId}?${mask}`;
+
+            const fields: Record<string, unknown> = {
+              studyConcept: { stringValue: String(studyConcept) }
+            };
+            if (conceptLang) fields.studyConceptLang = { stringValue: conceptLang };
+
             const patchRes = await fetch(docUrl, {
               method: "PATCH",
               headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                fields: {
-                  studyConcept: { stringValue: String(studyConcept) }
-                }
-              })
+              body: JSON.stringify({ fields })
             });
             
             if (!patchRes.ok) {

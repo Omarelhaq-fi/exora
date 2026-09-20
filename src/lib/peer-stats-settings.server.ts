@@ -53,7 +53,18 @@ async function fsSet(path: string, fields: Record<string, { booleanValue?: boole
   if (!r.ok) throw new Error(`fsSet ${path} ${r.status}: ${responseText}`);
 }
 
+// In-memory cache: threshold changes only via admin save, which invalidates.
+// Without this, every dashboard open + every question render costs 1 read.
+let thresholdCache: { data: PeerStatsSettings; exp: number } | null = null;
+const THRESHOLD_TTL_MS = 5 * 60_000;
+
+export function invalidatePeerStatsCache(): void {
+  thresholdCache = null;
+}
+
 export async function loadPeerStatsSettings(): Promise<PeerStatsSettings> {
+  const now = Date.now();
+  if (thresholdCache && thresholdCache.exp > now) return { ...thresholdCache.data };
   try {
     const doc = await fsGet("admin/peer_stats_settings");
     console.log("[peer-stats] load doc:", JSON.stringify(doc));
@@ -65,7 +76,9 @@ export async function loadPeerStatsSettings(): Promise<PeerStatsSettings> {
     const rawThreshold = f.threshold?.integerValue;
     console.log("[peer-stats] rawThreshold:", rawThreshold);
     const threshold = rawThreshold !== undefined ? parseInt(rawThreshold, 10) : DEFAULT.threshold;
-    return { threshold: Math.max(1, isNaN(threshold) ? DEFAULT.threshold : threshold) };
+    const data = { threshold: Math.max(1, isNaN(threshold) ? DEFAULT.threshold : threshold) };
+    thresholdCache = { data, exp: Date.now() + THRESHOLD_TTL_MS };
+    return { ...data };
   } catch (e) {
     console.error("[peer-stats] load failed:", e);
     return { ...DEFAULT };
@@ -85,5 +98,6 @@ export async function savePeerStatsSettings(patch: Partial<PeerStatsSettings>): 
     threshold: { integerValue: String(next.threshold) },
   });
   console.log("[peer-stats] saved successfully");
+  thresholdCache = { data: { ...next }, exp: Date.now() + THRESHOLD_TTL_MS };
   return next;
 }

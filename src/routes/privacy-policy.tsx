@@ -3,8 +3,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 export const Route = createFileRoute("/privacy-policy")({
   head: () => ({
     meta: [
-      { title: "Exora — Privacy Policy" },
-      { name: "description", content: "Privacy Policy for Exora." },
+      { title: "CuraQ | Privacy Policy" },
+      { name: "description", content: "Privacy Policy for CuraQ." },
     ],
   }),
   component: PrivacyPolicy,
@@ -19,7 +19,7 @@ function PrivacyPolicy() {
         <nav className="on-nav">
           <Link to="/" className="on-brand">
             <img src="/app/assets/logo.png" alt="" />
-            <span>Exora</span>
+            <span>CuraQ</span>
           </Link>
           <div className="on-nav-cta">
             <Link to="/" className="on-btn on-btn-ghost">Back to Home</Link>
@@ -44,12 +44,12 @@ function PrivacyPolicy() {
           
           <h3>1. Information We Collect</h3>
           <p>
-            When you use Exora, we collect information you provide directly to us. This includes your account details (email address, name, avatar) when you register, as well as the study materials you upload (such as PDFs, PowerPoints, and notes). 
+            When you use CuraQ, we collect information you provide directly to us. This includes your account details (email address, name, avatar) when you register, as well as the study materials you upload (such as PDFs, PowerPoints, and notes). 
           </p>
 
           <h3>2. How We Use Your Data (AI Processing)</h3>
           <p>
-            The core feature of Exora is generating study aids (flashcards, MCQs, summaries) using Artificial Intelligence. To do this, the documents and text you upload are processed by our secure AI partners. Your documents are used strictly to generate your personal study materials and are <strong>never</strong> used to train public AI models.
+            The core feature of CuraQ is generating study aids (flashcards, MCQs, summaries) using Artificial Intelligence. To do this, the documents and text you upload are processed by our secure AI partners. Your documents are used strictly to generate your personal study materials and are <strong>never</strong> used to train public AI models.
           </p>
 
           <h3>3. Data Storage & Security</h3>
@@ -59,7 +59,7 @@ function PrivacyPolicy() {
 
           <h3>4. Data Sharing</h3>
           <p>
-            We do not sell, rent, or trade your personal information or study documents to third parties. We only share necessary data with our trusted service providers (like our cloud hosting and AI API providers) strictly for the purpose of operating the Exora service.
+            We do not sell, rent, or trade your personal information or study documents to third parties. We only share necessary data with our trusted service providers (like our cloud hosting and AI API providers) strictly for the purpose of operating the CuraQ service.
           </p>
 
           <h3>5. Your Rights & Data Deletion</h3>
@@ -78,7 +78,7 @@ function PrivacyPolicy() {
         <div className="on-foot-inner">
           <Link to="/" className="on-brand">
             <img src="/app/assets/logo.png" alt="" />
-            <span>Exora</span>
+            <span>CuraQ</span>
           </Link>
           <div className="on-foot-links">
             <Link to="/terms-of-service">Terms of Service</Link>
@@ -86,7 +86,7 @@ function PrivacyPolicy() {
             <Link to="/refund-policy">Refund Policy</Link>
             <Link to="/contact-us">Contact Us</Link>
           </div>
-          <div className="on-foot-copy">© {new Date().getFullYear()} Exora</div>
+          <div className="on-foot-copy">© {new Date().getFullYear()} CuraQ</div>
         </div>
       </footer>
     </div>

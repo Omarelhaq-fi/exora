@@ -2,11 +2,16 @@
 // Returns ONLY non-sensitive fields: name, country, kind, college, year.
 import { createFileRoute } from "@tanstack/react-router";
 import { getServiceAccount, getGoogleAccessToken } from "@/lib/firebase.server";
+import { getQbankListCache, setQbankListCache } from "@/lib/qbank-cache.server";
 import { getCorsHeaders } from "@/lib/cors";
 import { getClientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit.server";
 
-let cachedPublicBanks: any = null;
-let cachedPublicBanksTime = 0;
+function toPublicShape(banks: { id: string; name: string; country: string; kind: string; college: string; year: string }[]) {
+  return {
+    mains: banks.filter((b) => b.kind !== "exam_prep"),
+    examPrep: banks.filter((b) => b.kind === "exam_prep"),
+  };
+}
 
 function json(body: unknown, status: number, cors: Record<string, string>) {
   return new Response(JSON.stringify(body), {
@@ -29,9 +34,9 @@ export const Route = createFileRoute("/api/public/qbanks")({
         if (!rl.ok) return rateLimitResponse(rl.retryAfter, cors);
 
         try {
-          if (cachedPublicBanks && Date.now() - cachedPublicBanksTime < 10 * 60_000) {
-            return json(cachedPublicBanks, 200, cors);
-          }
+          // Shared publish-invalidated cache (0 reads when warm).
+          const warm = getQbankListCache();
+          if (warm) return json(toPublicShape(warm.banks), 200, cors);
 
           const sa = getServiceAccount();
           const token = await getGoogleAccessToken();
@@ -53,22 +58,27 @@ export const Route = createFileRoute("/api/public/qbanks")({
             if (!pageToken) break;
           }
 
-          const all = docs.map((doc) => ({
-            id: doc.name.split("/").pop(),
-            name: doc.fields?.name?.stringValue || "(unnamed)",
-            country: doc.fields?.country?.stringValue || "global",
-            kind: doc.fields?.kind?.stringValue || "main",
-            college: doc.fields?.college?.stringValue || "",
-            year: doc.fields?.year?.stringValue || "",
-          }));
+          const all = docs.map((doc) => {
+            const updatedAtStr = doc.fields?.updatedAt?.integerValue || doc.fields?.updatedAt?.doubleValue;
+            let resources: unknown[] = [];
+            try { resources = JSON.parse(doc.fields?.resources?.stringValue || "[]"); } catch {}
+            return {
+              id: doc.name.split("/").pop(),
+              name: doc.fields?.name?.stringValue || "(unnamed)",
+              country: doc.fields?.country?.stringValue || "global",
+              updatedAt: updatedAtStr ? parseInt(String(updatedAtStr), 10) : 0,
+              isLocked: doc.fields?.isLocked?.booleanValue || false,
+              isPartyLocked: doc.fields?.isPartyLocked?.booleanValue || false,
+              resources,
+              kind: doc.fields?.kind?.stringValue || "main",
+              college: doc.fields?.college?.stringValue || "",
+              year: doc.fields?.year?.stringValue || "",
+            };
+          });
 
-          cachedPublicBanks = {
-            mains: all.filter((b) => b.kind !== "exam_prep"),
-            examPrep: all.filter((b) => b.kind === "exam_prep"),
-          };
-          cachedPublicBanksTime = Date.now();
+          setQbankListCache(all);
 
-          return json(cachedPublicBanks, 200, cors);
+          return json(toPublicShape(all), 200, cors);
         } catch (e: any) {
           console.error("[public-qbanks]", e?.message);
           return json({ error: "Server error" }, 500, cors);

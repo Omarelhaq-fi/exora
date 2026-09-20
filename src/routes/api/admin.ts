@@ -4,6 +4,7 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 import { gzipSync } from "node:zlib";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import {
   verifyFirebaseIdToken,
   getServiceAccount,
@@ -25,6 +26,15 @@ import { getClientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit.serv
 import { loadPaymentsSettings, savePaymentsSettings, type PaymentsSettings } from "@/lib/payments-settings.server";
 import { loadAuthSettings, saveAuthSettings, type AuthSettings } from "@/lib/auth-settings.server";
 import { loadPeerStatsSettings, savePeerStatsSettings, type PeerStatsSettings } from "@/lib/peer-stats-settings.server";
+import { invalidateQbankListCache, invalidateUserProfile } from "@/lib/qbank-cache.server";
+
+// Any write under `qbanks/...` (settings, updatedAt bumps on publish/import,
+// question/chunk edits) makes the cached qbank list stale — drop it so the
+// next read repopulates. Paths are Firestore document paths like
+// `qbanks/abc` or `qbanks/abc/questions/q1`.
+function touchQbankListCache(path: string): void {
+  if (path === "qbanks" || path.startsWith("qbanks/")) invalidateQbankListCache();
+}
 import { getKashierConfig } from "@/lib/kashier.server";
 import {
   loadProvidersConfig,
@@ -111,6 +121,7 @@ async function fsPatch(path: string, patch: Record<string, string | number | Dat
     body: JSON.stringify({ fields: toFields(patch) }),
   });
   if (!resp.ok) throw new Error(`Firestore patch failed: ${resp.status}`);
+  touchQbankListCache(path);
 }
 
 async function fsSetMerge(path: string, fields: Record<string, FSValue>) {
@@ -126,6 +137,63 @@ async function fsSetMerge(path: string, fields: Record<string, FSValue>) {
     body: JSON.stringify({ fields }),
   });
   if (!resp.ok) throw new Error(`Firestore set failed: ${resp.status}`);
+  touchQbankListCache(path);
+}
+
+// Rebuilds the single sys/qbank_index document so that list_categories costs
+// exactly 1 Firestore read regardless of how many QBanks exist.
+// Call this after any admin action that changes QBank metadata (create/delete/edit/publish).
+async function rebuildQbankIndex(): Promise<void> {
+  const sa = getServiceAccount();
+  const token = await getGoogleAccessToken();
+  const qbanks: any[] = [];
+  let pageToken = "";
+  while (true) {
+    const params = new URLSearchParams({ pageSize: "300" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const listRes = await fetch(
+      `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks?${params}`,
+      { method: "GET", headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!listRes.ok && listRes.status !== 404) break;
+    if (listRes.status === 404) break;
+    const data = await listRes.json();
+    if (data && Array.isArray(data.documents)) {
+      for (const doc of data.documents) {
+        const id = doc.name.split("/").pop();
+        const name = doc.fields?.name?.stringValue || id;
+        const country = doc.fields?.country?.stringValue || "global";
+        const updatedAtStr = doc.fields?.updatedAt?.integerValue || doc.fields?.updatedAt?.doubleValue;
+        const updatedAt = updatedAtStr ? parseInt(String(updatedAtStr), 10) : 0;
+        const isLocked = doc.fields?.isLocked?.booleanValue || doc.fields?.isLocked?.stringValue === "true" || false;
+        const isPartyLocked = doc.fields?.isPartyLocked?.booleanValue || doc.fields?.isPartyLocked?.stringValue === "true" || false;
+        let resources = [];
+        try { resources = JSON.parse(doc.fields?.resources?.stringValue || "[]"); } catch(e) {}
+        const kind = doc.fields?.kind?.stringValue || "main";
+        const college = doc.fields?.college?.stringValue || "";
+        const year = doc.fields?.year?.stringValue || "";
+        const storage_provider = doc.fields?.storage_provider?.stringValue || "";
+        qbanks.push({ id, name, country, updatedAt, isLocked, isPartyLocked, resources, kind, college, year, storage_provider });
+      }
+    }
+    pageToken = data.nextPageToken || "";
+    if (!pageToken) break;
+  }
+  // Write the whole list as a single JSON blob into sys/qbank_index
+  const mask = "updateMask.fieldPaths=data&updateMask.fieldPaths=updatedAt";
+  const indexUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/sys/qbank_index?${mask}`;
+  await fetch(indexUrl, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fields: {
+        data: { stringValue: JSON.stringify(qbanks) },
+        updatedAt: { integerValue: String(Date.now()) },
+      }
+    }),
+  });
+  // Also bust the in-memory cache so the current instance re-reads from the index
+  invalidateQbankListCache();
 }
 
 async function fsGet(path: string) {
@@ -258,6 +326,11 @@ async function fsDeleteDoc(path: string) {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!resp.ok && resp.status !== 404) throw new Error(`Firestore delete failed: ${resp.status}`);
+  touchQbankListCache(path);
+  if (path.startsWith("users_index/")) {
+    const parts = path.split("/");
+    if (parts.length === 2 && parts[1]) invalidateUserProfile(parts[1]);
+  }
 }
 
 type Body = {
@@ -1096,12 +1169,14 @@ export const Route = createFileRoute("/api/admin")({
               year: body.year || "",
               updatedAt: Date.now()
             }));
+            rebuildQbankIndex().catch(e => console.error("[index] create_qbank rebuild failed:", e.message));
             return json({ ok: true, id }, 200, cors);
           }
 
           if (body.action === "delete_qbank") {
             if (!body.qbankId) return json({ error: "Missing qbankId" }, 400, cors);
             await fsDeleteDoc(`qbanks/${body.qbankId}`);
+            rebuildQbankIndex().catch(e => console.error("[index] delete_qbank rebuild failed:", e.message));
             return json({ ok: true }, 200, cors);
           }
 
@@ -1118,6 +1193,7 @@ export const Route = createFileRoute("/api/admin")({
             if (typeof body.country === "string" && body.country.trim()) epPatch.country = { stringValue: body.country.trim() };
             if (typeof body.qbankName === "string" && body.qbankName.trim()) epPatch.name = { stringValue: body.qbankName.trim() };
             await fsSetMerge(`qbanks/${body.qbankId}`, epPatch);
+            rebuildQbankIndex().catch(e => console.error("[index] edit_qbank_settings rebuild failed:", e.message));
             return json({ ok: true }, 200, cors);
           }
 
@@ -1268,51 +1344,42 @@ export const Route = createFileRoute("/api/admin")({
               if (!chunkListToken) break;
             }
 
-            // 3. Write new chunks
-            const chunkSize = 2000;
-            const chunks: any[] = [];
-            for (let i = 0; i < questions.length; i += chunkSize) {
-              chunks.push(questions.slice(i, i + chunkSize));
-            }
-
-            for (let i = 0; i < chunks.length; i++) {
-               const chunkUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/chunks/chunk_${i}`;
-               const rawJson = JSON.stringify(chunks[i]);
-               const compressedStr = gzipSync(Buffer.from(rawJson, 'utf-8')).toString('base64');
-               
-               const chunkResp = await fetch(chunkUrl, {
-                 method: "PATCH",
-                 headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                 body: JSON.stringify({
-                   fields: {
-                     index: { integerValue: String(i) },
-                     data: { stringValue: compressedStr },
-                     timestamp: { timestampValue: new Date().toISOString() }
-                   }
-                 })
-               });
-               
-               if (!chunkResp.ok) {
-                 const errTxt = await chunkResp.text();
-                 console.error(`Failed to publish chunk ${i}:`, errTxt);
-                 return json({ error: `Failed to publish chunk ${i}. Try again later.` }, 500, cors);
-               }
-            }
+            // 3. Write new chunks to Cloudflare R2
+            const s3Client = new S3Client({
+              region: "auto",
+              endpoint: process.env.R2_ENDPOINT!,
+              forcePathStyle: true,
+              credentials: {
+                accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+                secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+              },
+            });
+            const rawJson = JSON.stringify(questions);
+            const compressedStr = gzipSync(Buffer.from(rawJson, 'utf-8'));
+            
+            await s3Client.send(new PutObjectCommand({
+              Bucket: process.env.R2_BUCKET_NAME || "curaq",
+              Key: `qbanks/${qbankId}/chunks.json.gz`,
+              Body: compressedStr,
+              ContentType: "application/gzip",
+            }));
 
             // 4. Update qbank metadata
-            const metaUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}?updateMask.fieldPaths=chunkCount&updateMask.fieldPaths=updatedAt`;
+            const metaUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}?updateMask.fieldPaths=chunkCount&updateMask.fieldPaths=updatedAt&updateMask.fieldPaths=storage_provider`;
             await fetch(metaUrl, {
               method: "PATCH",
               headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
               body: JSON.stringify({
                 fields: {
-                  chunkCount: { integerValue: String(chunks.length) },
-                  updatedAt: { integerValue: String(Date.now()) }
+                  chunkCount: { integerValue: "1" },
+                  updatedAt: { integerValue: String(Date.now()) },
+                  storage_provider: { stringValue: "r2" }
                 }
               })
             });
 
-            return json({ ok: true, chunksGenerated: chunks.length, totalQuestions: questions.length }, 200, cors);
+            rebuildQbankIndex().catch(e => console.error("[index] publish_qbank rebuild failed:", e.message));
+            return json({ ok: true, chunksGenerated: 1, totalQuestions: questions.length }, 200, cors);
           }
           if (body.action === "add_qbank_question") {
             if (!body.qbankId || !body.rawText) return json({ error: "Missing qbankId or rawText" }, 400, cors);
@@ -1849,27 +1916,24 @@ Text to process:\n${body.rawText}`
                 if (!cpt) break;
               }
 
-              // Write new chunks from remaining questions
-              const newChunks: any[] = [];
-              const chunkSize = 2000;
-              for (let i = 0; i < remaining.length; i += chunkSize) {
-                newChunks.push(remaining.slice(i, i + chunkSize));
-              }
-              for (let i = 0; i < newChunks.length; i++) {
-                const rawJson = JSON.stringify(newChunks[i]);
-                const compressedStr = gzipSync(Buffer.from(rawJson, 'utf-8')).toString('base64');
-                await fetch(`https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${body.qbankId}/chunks/chunk_${i}`, {
-                  method: "PATCH",
-                  headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    fields: {
-                      index: { integerValue: String(i) },
-                      data: { stringValue: compressedStr },
-                      timestamp: { timestampValue: new Date().toISOString() }
-                    }
-                  })
-                });
-              }
+              // Write new chunks to R2 from remaining questions
+              const s3Client = new S3Client({
+                region: "auto",
+                endpoint: process.env.R2_ENDPOINT!,
+                forcePathStyle: true,
+                credentials: {
+                  accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+                  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+                },
+              });
+              const rawJson = JSON.stringify(remaining);
+              const compressedStr = gzipSync(Buffer.from(rawJson, 'utf-8'));
+              await s3Client.send(new PutObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME || "curaq",
+                Key: `qbanks/${body.qbankId}/chunks.json.gz`,
+                Body: compressedStr,
+                ContentType: "application/gzip",
+              }));
             } catch (e) {
               console.error("[delete_multiple] chunk republish failed:", (e as Error).message);
             }
@@ -2320,6 +2384,8 @@ Text to process:\n${body.rawText}`
                   }),
                 }
               ).catch(() => {});
+              // Drop the cached profile so the new grant applies immediately.
+              invalidateUserProfile(reqUid);
             }
 
             // Mark resolved

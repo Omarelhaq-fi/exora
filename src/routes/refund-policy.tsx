@@ -3,8 +3,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 export const Route = createFileRoute("/refund-policy")({
   head: () => ({
     meta: [
-      { title: "Exora — Refund Policy" },
-      { name: "description", content: "Refund policy for Exora." },
+      { title: "CuraQ | Refund Policy" },
+      { name: "description", content: "Refund policy for CuraQ." },
     ],
   }),
   component: RefundPolicy,
@@ -19,7 +19,7 @@ function RefundPolicy() {
         <nav className="on-nav">
           <Link to="/" className="on-brand">
             <img src="/app/assets/logo.png" alt="" />
-            <span>Exora</span>
+            <span>CuraQ</span>
           </Link>
           <div className="on-nav-cta">
             <Link to="/" className="on-btn on-btn-ghost">Back to Home</Link>
@@ -32,7 +32,7 @@ function RefundPolicy() {
           <div className="on-hero-copy" style={{ margin: '0 auto' }}>
             <h1>Refund Policy</h1>
             <p className="on-lede" style={{ margin: '0 auto' }}>
-              Exora is 100% free to use. All financial contributions are considered voluntary donations.
+              CuraQ is 100% free to use. All financial contributions are considered voluntary donations.
             </p>
           </div>
         </div>
@@ -44,7 +44,7 @@ function RefundPolicy() {
           
           <h3>1. Core Policy: No Refunds</h3>
           <p>
-            Exora provides its entire suite of tools—including AI features, spaced repetition flashcards, and exam-style MCQs—completely free of charge. We do not lock features behind paywalls or require premium subscriptions. 
+            CuraQ provides its entire suite of tools (including AI features, spaced repetition flashcards, and exam-style MCQs) completely free of charge. We do not lock features behind paywalls or require premium subscriptions. 
           </p>
           <p>
             Because our services are fully accessible at no cost, any financial support provided by users is classified strictly as a <strong>voluntary donation</strong>. As such, <strong>all donations are final and non-refundable</strong>.
@@ -52,7 +52,7 @@ function RefundPolicy() {
 
           <h3>2. Purpose of Donations</h3>
           <p>
-            The funds we receive from our generous community are used directly to keep our servers running, cover API and infrastructure costs, and support the ongoing development of new features. By donating, you are helping ensure that Exora remains free and accessible to medical and university students around the world.
+            The funds we receive from our generous community are used directly to keep our servers running, cover API and infrastructure costs, and support the ongoing development of new features. By donating, you are helping ensure that CuraQ remains free and accessible to medical and university students around the world.
           </p>
 
           <h3>3. Accidental or Duplicate Donations</h3>
@@ -76,7 +76,7 @@ function RefundPolicy() {
         <div className="on-foot-inner">
           <Link to="/" className="on-brand">
             <img src="/app/assets/logo.png" alt="" />
-            <span>Exora</span>
+            <span>CuraQ</span>
           </Link>
           <div className="on-foot-links">
             <Link to="/terms-of-service">Terms of Service</Link>
@@ -84,7 +84,7 @@ function RefundPolicy() {
             <Link to="/refund-policy">Refund Policy</Link>
             <Link to="/contact-us">Contact Us</Link>
           </div>
-          <div className="on-foot-copy">© {new Date().getFullYear()} Exora</div>
+          <div className="on-foot-copy">© {new Date().getFullYear()} CuraQ</div>
         </div>
       </footer>
     </div>

@@ -3,8 +3,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 export const Route = createFileRoute("/contact-us")({
   head: () => ({
     meta: [
-      { title: "Exora — Contact Us" },
-      { name: "description", content: "Get in touch with the Exora team." },
+      { title: "CuraQ | Contact Us" },
+      { name: "description", content: "Get in touch with the CuraQ team." },
     ],
   }),
   component: ContactUs,
@@ -14,12 +14,12 @@ function ContactUs() {
   return (
     <div className="on-landing">
       <style>{css}</style>
-      
+
       <header className="on-nav-wrap">
         <nav className="on-nav">
           <Link to="/" className="on-brand">
             <img src="/app/assets/logo.png" alt="" />
-            <span>Exora</span>
+            <span>CuraQ</span>
           </Link>
           <div className="on-nav-cta">
             <Link to="/" className="on-btn on-btn-ghost">Back to Home</Link>
@@ -40,16 +40,16 @@ function ContactUs() {
 
       <section className="on-section" style={{ paddingTop: '40px', maxWidth: '800px', margin: '0 auto' }}>
         <div className="policy-content" style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-          
+
           <div style={{ background: '#ffffff', padding: '32px', borderRadius: '16px', border: '1px solid #dbe3e7', boxShadow: '0 12px 32px -12px rgba(10,61,74,0.1)' }}>
             <h3 style={{ margin: '0 0 16px 0' }}>💬 WhatsApp</h3>
             <p>
               For immediate assistance, questions about billing, or quick support, you can reach out to us directly on WhatsApp. We typically respond within a few hours.
             </p>
             <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#0e7c86', marginTop: '16px' }}>
-              +20 1003194801
+              +0000000000
             </p>
-            <a href="https://wa.me/201003194801" target="_blank" rel="noopener noreferrer" className="on-btn on-btn-primary" style={{ marginTop: '16px' }}>
+            <a href="https://wa.me/00000000" target="_blank" rel="noopener noreferrer" className="on-btn on-btn-primary" style={{ marginTop: '16px' }}>
               Message us on WhatsApp
             </a>
           </div>
@@ -71,14 +71,14 @@ function ContactUs() {
         <div className="on-foot-inner">
           <Link to="/" className="on-brand">
             <img src="/app/assets/logo.png" alt="" />
-            <span>Exora</span>
+            <span>CuraQ</span>
           </Link>
           <div className="on-foot-links">
             <Link to="/terms-of-service">Terms of Service</Link>
             <Link to="/privacy-policy">Privacy Policy</Link>
             <Link to="/refund-policy">Refund Policy</Link>
           </div>
-          <div className="on-foot-copy">© {new Date().getFullYear()} Exora</div>
+          <div className="on-foot-copy">© {new Date().getFullYear()} CuraQ</div>
         </div>
       </footer>
     </div>

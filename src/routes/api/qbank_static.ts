@@ -21,6 +21,7 @@ import { getServiceAccount, getGoogleAccessToken, dbStats } from "@/lib/firebase
 import { getCorsHeaders } from "@/lib/cors";
 import { getClientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit.server";
 import { gunzipSync } from "node:zlib";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const DRM_KEY_STR = process.env.DRM_KEY || "8f7e6d5c4b3a29108f7e6d5c4b3a2910";
 
@@ -70,13 +71,49 @@ export const Route = createFileRoute("/api/qbank_static")({
           const token = await getGoogleAccessToken();
 
           const questions: any[] = [];
+          
+          // Fetch QBank metadata to check storage provider
+          const metaUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
+          const metaRes = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
+          const metaData = metaRes.ok ? await metaRes.json() : {};
+          const storageProvider = metaData.fields?.storage_provider?.stringValue;
 
-          // 1. Try fetching from compressed chunks
           let fetchedFromChunks = false;
-          let chunkToken = "";
-          const allChunks: any[] = [];
 
-          while (true) {
+          // 1. Try fetching from Cloudflare R2
+          if (storageProvider === "r2") {
+            const s3Client = new S3Client({
+              region: "auto",
+              endpoint: process.env.R2_ENDPOINT!,
+              forcePathStyle: true,
+              credentials: {
+                accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+                secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+              },
+            });
+            try {
+              const objRes = await s3Client.send(new GetObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME || "curaq",
+                Key: `qbanks/${qbankId}/chunks.json.gz`,
+              }));
+              const bytes = await objRes.Body?.transformToByteArray();
+              if (bytes) {
+                const rawJson = gunzipSync(bytes).toString('utf-8');
+                const parsed = JSON.parse(rawJson);
+                questions.push(...parsed);
+                fetchedFromChunks = true;
+              }
+            } catch (e) {
+              console.error("[qbank_static] Failed to fetch chunks from R2", e);
+            }
+          }
+
+          // 2. Try fetching from Firestore chunks (fallback if not fetched from R2)
+          if (!fetchedFromChunks) {
+            let chunkToken = "";
+            const allChunks: any[] = [];
+
+            while (true) {
             const params = new URLSearchParams({ pageSize: "100" });
             if (chunkToken) params.set("pageToken", chunkToken);
             const chunkUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/chunks?${params}`;
@@ -119,7 +156,9 @@ export const Route = createFileRoute("/api/qbank_static")({
             }
           }
 
-          // 2. Fallback: fetch individual question documents (pre-chunk QBanks)
+          }
+
+          // 3. Fallback: fetch individual question documents (pre-chunk QBanks)
           if (!fetchedFromChunks) {
             let pageTokenQ = "";
             while (true) {
