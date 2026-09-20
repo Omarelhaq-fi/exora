@@ -10,7 +10,9 @@ const TTL_MS = 60_000;
 
 export async function loadAdminEmails(): Promise<Set<string>> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.emails;
-  const emails = new Set<string>([SEED_ADMIN]);
+  const emails = new Set<string>();
+  const seed = SEED_ADMIN.trim().toLowerCase();
+  if (seed && seed.includes("@")) emails.add(seed);
   try {
     const doc = await fsGetDoc("admin/config");
     const raw = doc?.fields?.emails?.stringValue;
@@ -27,5 +29,9 @@ export async function loadAdminEmails(): Promise<Set<string>> {
 }
 
 export async function isAdminEmail(email: string | undefined): Promise<boolean> {
-  return true; // Bypass admin check for local dev testing
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  if (!normalized.includes("@")) return false;
+  const emails = await loadAdminEmails();
+  return emails.has(normalized);
 }
