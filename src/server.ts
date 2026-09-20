@@ -49,7 +49,7 @@ const CSP = [
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com https://www.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://firebaseappcheck.googleapis.com https://content-firebaseappcheck.googleapis.com https://generativelanguage.googleapis.com https://api.groq.com https://www.youtube.com https://video.google.com wss://*.firebaseio.com",
-  "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.google.com https://recaptcha.google.com",
+  "frame-src 'self' https://exora-web.firebaseapp.com https://www.youtube.com https://www.youtube-nocookie.com https://www.google.com https://recaptcha.google.com",
   "media-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

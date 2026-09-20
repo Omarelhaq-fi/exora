@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ContactUsRouteImport } from './routes/contact-us'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as RefundPolicyRouteImport } from './routes/refund-policy'
@@ -23,6 +24,10 @@ import { Route as ApiNotificationsRouteImport } from './routes/api/notifications
 import { Route as ApiQbankRouteImport } from './routes/api/qbank'
 import { Route as ApiQbank_staticRouteImport } from './routes/api/qbank_static'
 import { Route as ApiSupportRouteImport } from './routes/api/support'
+import { Route as QbanksEgyptRouteImport } from './routes/qbanks/egypt'
+import { Route as QbanksPlabRouteImport } from './routes/qbanks/plab'
+import { Route as QbanksTunisiaRouteImport } from './routes/qbanks/tunisia'
+import { Route as QbanksUsmleRouteImport } from './routes/qbanks/usmle'
 import { Route as ApiPublicPeerStatsThresholdRouteImport } from './routes/api/public/peer-stats-threshold'
 import { Route as ApiPublicQbanksRouteImport } from './routes/api/public/qbanks'
 import { Route as ApiPublicYoutubeTranscriptRouteImport } from './routes/api/public/youtube-transcript'
@@ -38,6 +43,11 @@ const IndexRoute = IndexRouteImport.update({
 const ContactUsRoute = ContactUsRouteImport.update({
   id: '/contact-us',
   path: '/contact-us',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -100,6 +110,26 @@ const ApiSupportRoute = ApiSupportRouteImport.update({
   path: '/api/support',
   getParentRoute: () => rootRouteImport,
 } as any)
+const QbanksEgyptRoute = QbanksEgyptRouteImport.update({
+  id: '/qbanks/egypt',
+  path: '/qbanks/egypt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QbanksPlabRoute = QbanksPlabRouteImport.update({
+  id: '/qbanks/plab',
+  path: '/qbanks/plab',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QbanksTunisiaRoute = QbanksTunisiaRouteImport.update({
+  id: '/qbanks/tunisia',
+  path: '/qbanks/tunisia',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QbanksUsmleRoute = QbanksUsmleRouteImport.update({
+  id: '/qbanks/usmle',
+  path: '/qbanks/usmle',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicPeerStatsThresholdRoute =
   ApiPublicPeerStatsThresholdRouteImport.update({
     id: '/api/public/peer-stats-threshold',
@@ -136,6 +166,7 @@ const ApiPublicKashierWebhookRoute = ApiPublicKashierWebhookRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
+  '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/refund-policy': typeof RefundPolicyRoute
@@ -148,6 +179,10 @@ export interface FileRoutesByFullPath {
   '/api/qbank': typeof ApiQbankRoute
   '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
+  '/qbanks/egypt': typeof QbanksEgyptRoute
+  '/qbanks/plab': typeof QbanksPlabRoute
+  '/qbanks/tunisia': typeof QbanksTunisiaRoute
+  '/qbanks/usmle': typeof QbanksUsmleRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
   '/api/public/youtube-transcript': typeof ApiPublicYoutubeTranscriptRoute
@@ -158,6 +193,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
+  '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/refund-policy': typeof RefundPolicyRoute
@@ -170,6 +206,10 @@ export interface FileRoutesByTo {
   '/api/qbank': typeof ApiQbankRoute
   '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
+  '/qbanks/egypt': typeof QbanksEgyptRoute
+  '/qbanks/plab': typeof QbanksPlabRoute
+  '/qbanks/tunisia': typeof QbanksTunisiaRoute
+  '/qbanks/usmle': typeof QbanksUsmleRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
   '/api/public/youtube-transcript': typeof ApiPublicYoutubeTranscriptRoute
@@ -181,6 +221,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
+  '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/refund-policy': typeof RefundPolicyRoute
@@ -193,6 +234,10 @@ export interface FileRoutesById {
   '/api/qbank': typeof ApiQbankRoute
   '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
+  '/qbanks/egypt': typeof QbanksEgyptRoute
+  '/qbanks/plab': typeof QbanksPlabRoute
+  '/qbanks/tunisia': typeof QbanksTunisiaRoute
+  '/qbanks/usmle': typeof QbanksUsmleRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
   '/api/public/youtube-transcript': typeof ApiPublicYoutubeTranscriptRoute
@@ -205,6 +250,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/contact-us'
+    | '/login'
     | '/onboarding'
     | '/privacy-policy'
     | '/refund-policy'
@@ -217,6 +263,10 @@ export interface FileRouteTypes {
     | '/api/qbank'
     | '/api/qbank_static'
     | '/api/support'
+    | '/qbanks/egypt'
+    | '/qbanks/plab'
+    | '/qbanks/tunisia'
+    | '/qbanks/usmle'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
     | '/api/public/youtube-transcript'
@@ -227,6 +277,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/contact-us'
+    | '/login'
     | '/onboarding'
     | '/privacy-policy'
     | '/refund-policy'
@@ -239,6 +290,10 @@ export interface FileRouteTypes {
     | '/api/qbank'
     | '/api/qbank_static'
     | '/api/support'
+    | '/qbanks/egypt'
+    | '/qbanks/plab'
+    | '/qbanks/tunisia'
+    | '/qbanks/usmle'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
     | '/api/public/youtube-transcript'
@@ -249,6 +304,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/contact-us'
+    | '/login'
     | '/onboarding'
     | '/privacy-policy'
     | '/refund-policy'
@@ -261,6 +317,10 @@ export interface FileRouteTypes {
     | '/api/qbank'
     | '/api/qbank_static'
     | '/api/support'
+    | '/qbanks/egypt'
+    | '/qbanks/plab'
+    | '/qbanks/tunisia'
+    | '/qbanks/usmle'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
     | '/api/public/youtube-transcript'
@@ -272,6 +332,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ContactUsRoute: typeof ContactUsRoute
+  LoginRoute: typeof LoginRoute
   OnboardingRoute: typeof OnboardingRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
   RefundPolicyRoute: typeof RefundPolicyRoute
@@ -284,6 +345,10 @@ export interface RootRouteChildren {
   ApiQbankRoute: typeof ApiQbankRoute
   ApiQbank_staticRoute: typeof ApiQbank_staticRoute
   ApiSupportRoute: typeof ApiSupportRoute
+  QbanksEgyptRoute: typeof QbanksEgyptRoute
+  QbanksPlabRoute: typeof QbanksPlabRoute
+  QbanksTunisiaRoute: typeof QbanksTunisiaRoute
+  QbanksUsmleRoute: typeof QbanksUsmleRoute
   ApiPublicPeerStatsThresholdRoute: typeof ApiPublicPeerStatsThresholdRoute
   ApiPublicQbanksRoute: typeof ApiPublicQbanksRoute
   ApiPublicYoutubeTranscriptRoute: typeof ApiPublicYoutubeTranscriptRoute
@@ -306,6 +371,13 @@ declare module '@tanstack/react-router' {
       path: '/contact-us'
       fullPath: '/contact-us'
       preLoaderRoute: typeof ContactUsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/onboarding': {
@@ -392,6 +464,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSupportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/qbanks/egypt': {
+      id: '/qbanks/egypt'
+      path: '/qbanks/egypt'
+      fullPath: '/qbanks/egypt'
+      preLoaderRoute: typeof QbanksEgyptRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/qbanks/plab': {
+      id: '/qbanks/plab'
+      path: '/qbanks/plab'
+      fullPath: '/qbanks/plab'
+      preLoaderRoute: typeof QbanksPlabRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/qbanks/tunisia': {
+      id: '/qbanks/tunisia'
+      path: '/qbanks/tunisia'
+      fullPath: '/qbanks/tunisia'
+      preLoaderRoute: typeof QbanksTunisiaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/qbanks/usmle': {
+      id: '/qbanks/usmle'
+      path: '/qbanks/usmle'
+      fullPath: '/qbanks/usmle'
+      preLoaderRoute: typeof QbanksUsmleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/peer-stats-threshold': {
       id: '/api/public/peer-stats-threshold'
       path: '/api/public/peer-stats-threshold'
@@ -440,6 +540,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ContactUsRoute: ContactUsRoute,
+  LoginRoute: LoginRoute,
   OnboardingRoute: OnboardingRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
   RefundPolicyRoute: RefundPolicyRoute,
@@ -452,6 +553,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApiQbankRoute: ApiQbankRoute,
   ApiQbank_staticRoute: ApiQbank_staticRoute,
   ApiSupportRoute: ApiSupportRoute,
+  QbanksEgyptRoute: QbanksEgyptRoute,
+  QbanksPlabRoute: QbanksPlabRoute,
+  QbanksTunisiaRoute: QbanksTunisiaRoute,
+  QbanksUsmleRoute: QbanksUsmleRoute,
   ApiPublicPeerStatsThresholdRoute: ApiPublicPeerStatsThresholdRoute,
   ApiPublicQbanksRoute: ApiPublicQbanksRoute,
   ApiPublicYoutubeTranscriptRoute: ApiPublicYoutubeTranscriptRoute,
