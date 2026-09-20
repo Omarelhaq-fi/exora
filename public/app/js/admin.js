@@ -26,19 +26,16 @@
   }
   window.checkAdmin = async function(force) {
     if (whoamiChecked && !force) return isAdminCache;
-    const cached = sessionStorage.getItem('exora_is_admin');
-    if (!force && cached !== null) {
-      isAdminCache = cached === '1';
-      whoamiChecked = true;
-      window.isAdminCache = isAdminCache;
-      return isAdminCache;
-    }
+    // NOTE: do NOT trust sessionStorage here — a previous server-side bypass
+    // poisoned cached '1' values for non-admins. Always verify with the server.
+    // Clear any legacy cached value so stale admin flags disappear on next load.
+    try { sessionStorage.removeItem('exora_is_admin'); } catch (_) {}
     try {
       const res = await api("/api/admin?action=whoami", { method: "GET" });
       isAdminCache = !!res.admin;
-      sessionStorage.setItem('exora_is_admin', isAdminCache ? '1' : '0');
       whoamiChecked = true;
       window.isAdminCache = isAdminCache;
+      window.isQBankAdmin = isAdminCache;
       return isAdminCache;
     } catch (e) {
       return false;
@@ -1360,12 +1357,18 @@
     }
     firebase.auth().onAuthStateChanged(function (user) {
       if (user) {
+        whoamiChecked = false; // re-verify on account switch — never reuse previous account's result
         window.mirrorUserToIndex(user);
         window.showAdminButton();
       } else {
         whoamiChecked = false; isAdminCache = false;
+        window.isAdminCache = false;
+        window.isQBankAdmin = false;
+        try { sessionStorage.removeItem('exora_is_admin'); } catch (_) {}
         const btn = document.getElementById("admin-panel-btn");
         if (btn) btn.style.display = "none";
+        const w = document.getElementById('admin-diagnostic-widget');
+        if (w) w.remove();
       }
     });
   }
