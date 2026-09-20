@@ -367,15 +367,7 @@
         if (explorerView) explorerView.style.display = "block";
         
         // Update Sidebar active state
-        document.querySelectorAll('nav a').forEach(a => {
-            a.classList.remove('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-            a.classList.add('border-transparent', 'text-on-surface-variant', 'font-medium');
-        });
-        const fcTab = document.querySelector('nav a[data-path="flashcards"]');
-        if (fcTab) {
-            fcTab.classList.remove('border-transparent', 'text-on-surface-variant', 'font-medium');
-            fcTab.classList.add('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-        }
+        if (window.setQBankNav) window.setQBankNav('flashcards');
 
         if (typeof window.closeSidebar === 'function') window.closeSidebar();
         

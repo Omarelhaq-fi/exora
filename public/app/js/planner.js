@@ -24,15 +24,7 @@
         if (plv) plv.style.display = "flex";
 
         // Update active nav class
-        document.querySelectorAll('nav a').forEach(a => {
-            a.classList.remove('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-            a.classList.add('border-transparent', 'text-on-surface-variant', 'font-medium');
-        });
-        const pt = document.querySelector('nav a[data-path="planner"]');
-        if (pt) {
-            pt.classList.remove('border-transparent', 'text-on-surface-variant', 'font-medium');
-            pt.classList.add('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-        }
+        if (window.setQBankNav) window.setQBankNav('planner');
 
         renderPlannerView();
     };

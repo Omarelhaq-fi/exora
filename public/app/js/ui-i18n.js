@@ -179,7 +179,7 @@
         "Close": { ar: "إغلاق", fr: "Fermer" },
 
         // Welcome onboarding
-        "Welcome to Exora": { ar: "مرحبًا بك في Exora", fr: "Bienvenue sur Exora" },
+        "Welcome to CuraQ": { ar: "مرحبًا بك في CuraQ", fr: "Bienvenue sur CuraQ" },
         "Let's personalize your workspace. Your country decides which question banks you get.": { ar: "لنخصص مساحة عملك. بلدك تحدد بنوك الأسئلة التي تحصل عليها.", fr: "Personnalisons votre espace. Votre pays détermine les banques de questions accessibles." },
         "Your full name": { ar: "اسمك الكامل", fr: "Votre nom complet" },
         "e.g. Ahmed Hassan": { ar: "مثال: أحمد حسن", fr: "ex: Ahmed Hassan" },

@@ -93,7 +93,7 @@
           <div class="wo-hero-content">
             <div class="wo-brand-hero">
               <div class="wo-logo-hero"><i class="fa-solid fa-sparkles"></i></div>
-              <span>Exora Workspace</span>
+              <span>CuraQ Workspace</span>
             </div>
             
             <h1 class="wo-hero-title">Personalize your study experience.</h1>

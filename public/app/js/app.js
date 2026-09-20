@@ -11,19 +11,30 @@ let activeDocId = null;
 async function initApp(user) {
     if (!user) {
         // Redirect to landing page for sign-in/sign-up
+        try { window.hideGlobalLoader && window.hideGlobalLoader(); } catch (_) {}
         window.location.href = '/';
         return;
     }
 
+    try {
     const loginEl = document.getElementById('login-screen');
     if (loginEl) loginEl.style.display = 'none';
-    document.getElementById('app-wrapper').style.display = 'block';
+    const appWrapper = document.getElementById('app-wrapper');
+    if (appWrapper) appWrapper.style.display = 'block';
     window.clearStaleClickBlockers && window.clearStaleClickBlockers();
     try { window.updateProfileCircle && window.updateProfileCircle(user); } catch (e) {}
 
     let cloudDb = null;
     if (window.loadDbFromCloud) {
-        cloudDb = await window.loadDbFromCloud();
+        try {
+            cloudDb = await Promise.race([
+                window.loadDbFromCloud(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('loadDb timeout')), 7000))
+            ]);
+        } catch (e) {
+            try { console.warn('loadDbFromCloud failed/timeout, continuing with local db', e); } catch (_) {}
+            cloudDb = null;
+        }
     }
 
     if (cloudDb) {
@@ -39,7 +50,12 @@ async function initApp(user) {
     }
 
 
-    // Ensure backwards compatibility
+    // Ensure backwards compatibility (cloud payloads can be partial/malformed)
+    if (!db || typeof db !== 'object') db = {};
+    if (!Array.isArray(db.documents)) db.documents = [];
+    if (!Array.isArray(db.rems)) db.rems = [];
+    if (!Array.isArray(db.flashcardsQueue)) db.flashcardsQueue = [];
+    if (!Array.isArray(db.sections)) db.sections = [];
     if (!db.subjects) {
         db.subjects = [{ id: 's1', name: 'General' }];
     }
@@ -69,16 +85,17 @@ async function initApp(user) {
     if (!Array.isArray(db.schedule)) {
         db.schedule = [];
     }
-    db.documents.forEach(d => {
+    (db.documents || []).forEach(d => {
+        if (!d || typeof d !== 'object') return;
         if (!d.sections) d.sections = [];
         if (d.pdfContextText === undefined) d.pdfContextText = "";
-        if (!d.subjectId) d.subjectId = db.subjects[0].id;
+        if (!d.subjectId) d.subjectId = (db.subjects && db.subjects[0] && db.subjects[0].id) || 's1';
     });
 
     // Make refreshAppUI global if not already, and call it
     window.refreshAppUI = refreshAppUI;
     window.db = db;
-    window.preloadQBank && window.preloadQBank();
+    if (window.preloadQBank) window.preloadQBank().catch(() => {});
     if (window.i18nInit) window.i18nInit();
     // Try restoring the last viewed doc / tab / chunk from a previous session.
     let restored = false;
@@ -86,9 +103,26 @@ async function initApp(user) {
     
     // Always boot into QBank mode
     localStorage.setItem("omnote_active_platform", "qbank");
-    window.switchPlatform("qbank", true);
+    try {
+        window.switchPlatform("qbank", true);
+    } catch (e) {
+        try { console.error('switchPlatform failed', e); } catch (_) {}
+        try { window.hideGlobalLoader && window.hideGlobalLoader(); } catch (_) {}
+        const area = document.getElementById("qbank-home-content");
+        if (area) area.innerHTML = '<div style="padding:40px;text-align:center;color:#b91c1c;">Failed to start dashboard: ' + ((e && e.message) || e) + '</div>';
+    }
 
     // Tour disabled - QBank only mode
+    } catch (e) {
+        try { console.error('initApp failed', e); } catch (_) {}
+        try {
+            const appWrapper2 = document.getElementById('app-wrapper');
+            if (appWrapper2) appWrapper2.style.display = 'block';
+            window.hideGlobalLoader && window.hideGlobalLoader();
+            const area2 = document.getElementById("qbank-home-content");
+            if (area2 && !area2.innerHTML) area2.innerHTML = '<div style="padding:40px;text-align:center;color:#b91c1c;">Failed to load dashboard. Please reload.</div>';
+        } catch (_) {}
+    }
 }
 
 window.switchPlatform = function(platform, isInit = false) {
@@ -97,7 +131,8 @@ window.switchPlatform = function(platform, isInit = false) {
     const chooser = document.getElementById('platform-chooser');
     if (chooser) chooser.style.display = 'none';
     
-    document.getElementById('app-wrapper').style.display = 'block';
+    const _aw = document.getElementById('app-wrapper');
+    if (_aw) _aw.style.display = 'block';
     
     // Hide learning-only sidebar elements
     const libGrp = document.getElementById("sidebar-library-group");
@@ -1147,14 +1182,26 @@ window.toggleAccordion = function (headerElement) {
 
 window.addEventListener('DOMContentLoaded', () => {
     if (window.firebase && firebase.auth) {
-        const unsubscribe = firebase.auth().onAuthStateChanged(user => {
-            unsubscribe();
-            initApp(user);
-        });
-
-        // Listen for subsequent changes to update UI
+        // Single listener: re-init ONLY when the signed-in user actually
+        // changes (sign-in / sign-out / account switch). Firebase also fires
+        // onAuthStateChanged on silent token refreshes for the SAME user —
+        // re-running initApp there reloads window.db from the cloud snapshot
+        // and reverts just-made local changes (e.g. a bank switch whose
+        // cloud write hasn't landed yet), besides racing in-flight loads.
+        let booted = false;
+        window.__initUid = undefined;
         firebase.auth().onAuthStateChanged(user => {
-            initApp(user);
+            const uid = user ? user.uid : null;
+            if (!booted) {
+                booted = true;
+                window.__initUid = uid;
+                initApp(user);
+                return;
+            }
+            if (uid !== window.__initUid) {
+                window.__initUid = uid;
+                initApp(user);
+            }
         });
     } else {
         initApp(null);

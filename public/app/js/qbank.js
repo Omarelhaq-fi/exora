@@ -14,6 +14,39 @@
   let cachedQBanks = {}; // { qbankId: { questions, progress } }
   let isSyncing = false;
 
+  // Navigation token: every top-level bank navigation bumps this. Async
+  // continuations bail out if a newer navigation started, so a slow
+  // in-flight load can never overwrite the freshly selected bank with
+  // stale (old-bank) content.
+  function nextNavToken() {
+    window.__qbankNavToken = (window.__qbankNavToken || 0) + 1;
+    return window.__qbankNavToken;
+  }
+  function navStale(tok) { return tok !== window.__qbankNavToken; }
+
+  // Single sidebar active-state setter (solid 3px left bar + subtle tint
+  // via .qbank-nav-active in layout-polish.css). Replaces the scattered
+  // per-view Tailwind class juggling so every view looks identical.
+  window.setQBankNav = function(path) {
+    try {
+      document.querySelectorAll('nav a[data-path]').forEach(a => {
+        a.classList.remove(
+          'qbank-nav-active',
+          'border-[#007a7a]', 'bg-[#007a7a]/5', 'text-[#007a7a]', 'font-bold',
+          'border-primary', 'bg-primary/10', 'text-primary'
+        );
+        if (!a.classList.contains('font-medium')) a.classList.add('font-medium');
+        if (!a.classList.contains('text-gray-600')) a.classList.add('text-gray-600');
+      });
+      if (!path) return;
+      const tab = document.querySelector('nav a[data-path="' + path + '"]');
+      if (tab) {
+        tab.classList.remove('border-transparent', 'text-gray-600', 'font-medium', 'text-on-surface-variant');
+        tab.classList.add('qbank-nav-active');
+      }
+    } catch (_) {}
+  };
+
   // --- IndexedDB Caching ---
   const DB_NAME = "OmnoteQBankCache";
   const STORE_NAME = "qbanks";
@@ -145,7 +178,9 @@
     if (pendingApiGets.has(qs)) return pendingApiGets.get(qs);
     
     const promise = (async () => {
-      const token = await (window.firebase && firebase.auth().currentUser.getIdToken());
+      const _u = window.firebase && firebase.auth().currentUser;
+      if (!_u) throw new Error("Not signed in");
+      const token = await _u.getIdToken();
       if (!token) throw new Error("Not signed in");
       const res = await fetch(`/api/qbank?${qs}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -172,7 +207,9 @@
   }
 
   async function apiPost(action, body) {
-    const token = await (window.firebase && firebase.auth().currentUser.getIdToken());
+    const _u2 = window.firebase && firebase.auth().currentUser;
+    if (!_u2) throw new Error("Not signed in");
+    const token = await _u2.getIdToken();
     if (!token) throw new Error("Not signed in");
     const res = await fetch(`/api/qbank`, {
       method: "POST",
@@ -214,8 +251,18 @@
     if (!preloadPromise) {
       preloadPromise = (async () => {
         try {
-          const res = await apiGet("list_categories");
-          cachedCategories = res.qbanks || [];
+          // Version-aware: send our known maxUpdatedAt; server answers
+          // `{ unchanged: true }` with 0 Firestore reads when nothing was
+          // published since. `window.__qbanksMaxUpdatedAt` persists for the
+          // page session; cachedCategories is never refetched otherwise.
+          // Only send v when we actually hold the matching list — otherwise
+          // an `unchanged` answer would leave us with nothing to render.
+          const params = {};
+          if (window.__qbanksMaxUpdatedAt && cachedCategories) params.v = String(window.__qbanksMaxUpdatedAt);
+          const res = await apiGet("list_categories", params);
+          if (res.unchanged) return; // keep existing cachedCategories
+          if (Array.isArray(res.qbanks)) cachedCategories = res.qbanks;
+          if (res.maxUpdatedAt) window.__qbanksMaxUpdatedAt = res.maxUpdatedAt;
         } catch (e) {
           console.error("Preload QBank failed", e);
           preloadPromise = null; // allow retry
@@ -388,16 +435,25 @@
   `;
 
   // --- QBank Selection ---
-  window.selectQBank = function(qbankId) {
+  window.selectQBank = async function(qbankId) {
+      if (!qbankId) return;
       if (!window.db) window.db = {};
+      // Commit the switch synchronously so nothing can render the old bank
+      // while the dashboard loads (module state + persisted selection).
       window.db.selectedQBankId = qbankId;
-      if (typeof window.saveDb === "function") window.saveDb();
-      window.openQBank();
+      currentQBankId = qbankId;
+      window.qbankCurrentSubjectStats = null;
+      nextNavToken();
+      try {
+        if (typeof window.saveDb === "function") window.saveDb();
+      } catch (_) {}
+      await window.openQBank();
   };
 
   window.openQBankSelection = async function() {
+    const myNav = nextNavToken();
     const area = document.getElementById("qbank-home-content");
-    if (!area) return;
+    if (!area) { if (window.hideGlobalLoader) window.hideGlobalLoader(); return; }
     
     const modal = document.getElementById("qbank-modal");
     if (modal) modal.style.display = "none";
@@ -416,11 +472,23 @@
 
     try {
       await window.preloadQBank();
+      // Revalidate against the publish timestamp: 0 Firestore reads when
+      // nothing was published since, fresh list otherwise (no reload needed
+      // to see newly published banks).
+      try {
+        const params = {};
+        if (window.__qbanksMaxUpdatedAt && cachedCategories) params.v = String(window.__qbanksMaxUpdatedAt);
+        const re = await apiGet("list_categories", params);
+        if (!re.unchanged && Array.isArray(re.qbanks)) cachedCategories = re.qbanks;
+        if (re.maxUpdatedAt) window.__qbanksMaxUpdatedAt = re.maxUpdatedAt;
+      } catch (e) { /* keep session cache on revalidation failure */ }
+      if (navStale(myNav)) return;
       qbanks = cachedCategories || [];
       qbanks = qbanks.filter(q => q.kind !== "exam_prep");
       
       if (qbanks.length === 0) {
         area.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No QBanks available yet. Admins can create them in the Admin Panel.</div>';
+        if (window.hideGlobalLoader) window.hideGlobalLoader();
         return;
       }
       
@@ -491,15 +559,18 @@
       html += `</div></div>`;
       area.innerHTML = html;
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+      if (window.hideGlobalLoader) window.hideGlobalLoader();
     } catch (e) {
       area.innerHTML = `<div style="padding:40px;text-align:center;color:var(--danger);">Failed to load QBanks: ${e.message}</div>`;
+      if (window.hideGlobalLoader) window.hideGlobalLoader();
     }
   };
 
   // --- QBank Home Dashboard ---
   window.openQBank = async function () {
+    const myNav = nextNavToken();
     const area = document.getElementById("qbank-home-content");
-    if (!area) return;
+    if (!area) { if (window.hideGlobalLoader) window.hideGlobalLoader(); return; }
     
     const modal = document.getElementById("qbank-modal");
     if (modal) modal.style.display = "none";
@@ -515,15 +586,7 @@
     const qbankView = document.getElementById("qbank-home-view");
     if (qbankView) qbankView.style.display = "flex";
     // Update Sidebar active state
-    document.querySelectorAll('nav a').forEach(a => {
-        a.classList.remove('border-[#007a7a]', 'bg-[#007a7a]/5', 'text-[#007a7a]', 'font-bold');
-        a.classList.add('border-transparent', 'text-gray-600', 'font-medium');
-      });
-      const homeTab = document.querySelector('nav a[data-path="home"]');
-      if (homeTab) {
-        homeTab.classList.remove('border-transparent', 'text-gray-600', 'font-medium');
-        homeTab.classList.add('border-[#007a7a]', 'bg-[#007a7a]/5', 'text-[#007a7a]', 'font-bold');
-      }
+    if (window.setQBankNav) window.setQBankNav('home');
 
     // Load peer stats threshold
     _loadPeerThreshold();
@@ -551,17 +614,29 @@
     
     try {
       if (!window.db || !window.db.selectedQBankId) {
-        window.openQBankSelection();
+        try { await window.openQBankSelection(); }
+        finally { if (window.hideGlobalLoader) window.hideGlobalLoader(); }
         return;
       }
       const activeQBankId = window.db.selectedQBankId;
 
       await window.bootstrapAccess(); // always fresh — never trust cached access
+      if (navStale(myNav)) return;
+      // Bootstrap may correct the selection (revoked bank -> first allowed).
+      // Restart once with the corrected id instead of rendering a stale mix.
+      if (!window.db || window.db.selectedQBankId !== activeQBankId) {
+        return window.openQBank();
+      }
+      // Commit the active bank NOW so "Browse Specialties" can never fall
+      // back to the previous bank, even if question loading below fails.
+      currentQBankId = activeQBankId;
       await window.preloadQBank();
+      if (navStale(myNav)) return;
       qbanks = (cachedCategories || []).filter(q => q.kind !== "exam_prep");
       
       if (qbanks.length === 0) {
         area.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No QBanks available yet. Admins can create them in the Admin Panel.</div>';
+        if (window.hideGlobalLoader) window.hideGlobalLoader();
         return;
       }
 
@@ -613,10 +688,11 @@
                  // Persist to IndexedDB so next visit is instant
                  setCachedQBank(activeQBankId, { updatedAt: catUpdated, questions });
              }
-         } catch (e) {
-             console.error("Failed to load bank data", e);
-         }
-      }
+          } catch (e) {
+              console.error("Failed to load bank data", e);
+          }
+       }
+       if (navStale(myNav)) return;
 
       let totalQuestions = 0;
       let totalAnswered = 0;
@@ -983,252 +1059,253 @@
 
       const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 
-      // Header Section
+      // Header Section (compact clinical)
+      const escName = window.escapeHtml ? window.escapeHtml(firstName) : firstName;
       let headerHtml = `
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:32px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
           <div>
-              <h1 style="font-size:24px; font-weight:bold; color:#1f2937; margin:0 0 4px 0;">Good ${greeting.toLowerCase().replace('good ', '')}, ${firstName} 👋</h1>
-              <p style="color:#6b7280; font-size:14px; margin:0;">Keep going. Consistency today builds the doctor you want to be tomorrow.</p>
+              <h1 style="font-size:20px; font-weight:700; color:#0F172A; margin:0 0 2px 0; letter-spacing:-0.01em;">Good ${greeting.toLowerCase().replace('good ', '')}, ${escName}</h1>
+              <p style="color:#64748B; font-size:12.5px; margin:0;">Consistency today builds the doctor you want to be tomorrow.</p>
           </div>
-          <div style="display:flex; align-items:center; gap:24px; text-align:right;">
-              <div style="display:flex; align-items:center; gap:12px; background:#fff; padding:8px 16px; border-radius:8px; border:1px solid #e5e7eb; box-shadow:0 1px 2px rgba(0,0,0,0.02);">
-                  <div style="background:#e6f2f2; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center;">
-                      <i class="fa-solid fa-fire" style="color:#007a7a; font-size:14px;"></i>
-                  </div>
-                  <div style="text-align:left;">
-                      <div style="font-size:11px; color:#6b7280; font-weight:600; text-transform:uppercase;">Study Streak</div>
-                      <div style="font-size:14px; font-weight:bold; color:#111827;">${streakVal} Days</div>
-                  </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+              <div style="display:flex; align-items:center; gap:8px; background:#fff; padding:6px 12px; border-radius:6px; border:1px solid #E2E8F0;">
+                  <span style="background:#e6f2f2; width:26px; height:26px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center;">
+                      <i class="fa-solid fa-fire" style="color:#007a7a; font-size:13px;"></i>
+                  </span>
+                  <span style="font-size:13px; font-weight:700; color:#0F172A;">${streakVal}d</span>
+                  <span style="font-size:11px; color:#64748B; font-weight:600;">STREAK</span>
               </div>
-              <div>
-                  <div style="color:#6b7280; font-size:13px; margin-bottom:2px;">${dateStr}</div>
-                  <div style="color:#9ca3af; font-size:12px;">Progress over perfection.</div>
-              </div>
+              <div style="color:#64748B; font-size:12px;">${dateStr}</div>
           </div>
       </div>
       `;
 
-      // Continue Studying Card
+      // Card 1: Continue Studying (primary call to action, visually dominant)
+      const escLastSubject = window.escapeHtml ? window.escapeHtml(lastSubject) : lastSubject;
       let continueCardHtml = '';
       if (lastSession && lastSession.qbankId && !isSessionCompleted) {
-          const qlPct = subStat && subStat.total > 0 ? Math.round((subStat.answered / subStat.total) * 100) : 0;
           const subjScore = subStat && subStat.answered > 0 ? Math.round((subStat.correct / subStat.answered) * 100) : 0;
-          const weakTopicsCount = Math.max(1, Math.min(5, Math.floor((100 - (subjScore || 50)) / 10)));
-          
+          const scoreBadge = subjScore >= 70
+              ? `<span class="clin-badge clin-badge-good">${subjScore}%</span>`
+              : (subjScore >= 50
+                  ? `<span class="clin-badge clin-badge-warn">${subjScore}%</span>`
+                  : `<span class="clin-badge clin-badge-bad">${subjScore}%</span>`);
           continueCardHtml = `
-          <div class="dash-card" style="display:flex; flex-direction:column;">
-              <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
-                  <h2 class="dash-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a; margin-right:8px;"></i>Continue Studying</h2>
-                  <a href="#" onclick="window.openExamPrepTab && window.openExamPrepTab(); return false;" style="color:#6b7280; font-size:12px; text-decoration:none; font-weight:500;">Change Session</a>
+          <div class="clin-card" style="display:flex; flex-direction:column;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <h2 class="clin-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a;"></i>Continue studying</h2>
+                  <a href="#" onclick="window.openExamPrepTab && window.openExamPrepTab(); return false;" style="color:#64748B; font-size:11.5px; text-decoration:none; font-weight:600;">Change</a>
               </div>
-              
-              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:24px;">
-                  <div style="flex:1; display:flex; flex-direction:column;">
-                      <div style="font-weight:800; color:#111827; font-size:18px; margin-bottom:8px;">${window.escapeHtml ? window.escapeHtml(lastSubject) : lastSubject}</div>
-                      
-                      <div style="color:#4b5563; font-size:14px; font-weight:500; margin-bottom:4px;">
-                          <span style="color:#111827; font-weight:700;">${subStat ? subStat.answered : 0}</span> questions completed &middot; <span style="font-weight:700; color:${subjScore >= 70 ? '#10b981' : (subjScore >= 50 ? '#f59e0b' : '#e11d48')};">${subjScore}%</span> last score
-                      </div>
-                      <div style="color:#e11d48; font-size:14px; font-weight:600; margin-bottom:24px;">
-                          ${weakTopicsCount} weak topics identified
-                      </div>
-                      
-                      <div style="margin-top:auto;">
-                          <button onclick="window.qbankContinueLast()" style="background:transparent; border:1px solid #007a7a; color:#007a7a; border-radius:6px; padding:8px 24px; font-weight:600; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; transition:all 0.2s;" onmouseover="this.style.background='#007a7a'; this.style.color='#fff';" onmouseout="this.style.background='transparent'; this.style.color='#007a7a';">
-                              Continue Session <i class="fa-solid fa-arrow-right"></i>
-                          </button>
-                      </div>
-                  </div>
-                  
-                  <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:16px; width:220px; flex-shrink:0;">
-                      <div style="font-size:12px; color:#6b7280; font-weight:700; text-transform:uppercase; margin-bottom:8px; letter-spacing:0.5px;">Next Up</div>
-                      <div style="font-weight:700; color:#111827; font-size:14px; margin-bottom:12px;">${lastSubject === "All Subjects" ? "Mixed Review Block" : "Priority Topic Review"}</div>
-                      
-                      <div style="display:flex; flex-direction:column; gap:8px;">
-                          <div style="color:#4b5563; font-size:13px; display:flex; align-items:center; gap:8px;">
-                              <i class="fa-solid fa-list-check text-gray-400 w-4 text-center"></i> Estimated 15 Qs
-                          </div>
-                          <div style="color:#4b5563; font-size:13px; display:flex; align-items:center; gap:8px;">
-                              <i class="fa-regular fa-clock text-gray-400 w-4 text-center"></i> ~12 min
-                          </div>
-                      </div>
-                  </div>
+              <div style="font-weight:700; color:#0F172A; font-size:16px; margin-bottom:4px;">${escLastSubject}</div>
+              <div class="clin-muted" style="font-size:12px; margin-bottom:2px;">${subStat ? subStat.answered : 0} of ${subStat ? subStat.total : 0} answered &middot; last score ${scoreBadge}</div>
+              <div class="clin-muted" style="font-size:12px; margin-bottom:12px;">${lastSubject === "All Subjects" ? "Mixed review block" : "Priority topic review"} &middot; ~15 Qs &middot; ~12 min</div>
+              <div style="margin-top:auto;">
+                  <button class="clin-btn-primary" onclick="window.qbankContinueLast()">
+                      Continue session <i class="fa-solid fa-arrow-right" style="font-size:12px;"></i>
+                  </button>
               </div>
           </div>
           `;
       } else {
           continueCardHtml = `
-          <div class="dash-card">
-              <h2 class="dash-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a; margin-right:8px;"></i>Continue Studying</h2>
-              <div style="margin-top:20px; text-align:center; color:#6b7280; font-size:14px;">
-                  Ready to dive in? Start a new session to track your progress.
-              </div>
-              <div style="text-align:center; margin-top:16px;">
-                  <button onclick="window.openExamPrepTab && window.openExamPrepTab()" style="background:#007a7a; color:white; border:none; border-radius:6px; padding:8px 24px; font-weight:600; font-size:13px; cursor:pointer;">
-                      Start New Session
+          <div class="clin-card" style="display:flex; flex-direction:column;">
+              <h2 class="clin-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a;"></i>Continue studying</h2>
+              <div class="clin-muted" style="font-size:12.5px; margin:2px 0 12px;">Ready to dive in? Start a block to track progress.</div>
+              <div style="margin-top:auto;">
+                  <button class="clin-btn-primary" onclick="window.openExamPrepTab && window.openExamPrepTab()">
+                      Start new session <i class="fa-solid fa-arrow-right" style="font-size:12px;"></i>
                   </button>
               </div>
           </div>
           `;
       }
 
-      // Performance Card
+      // Wide analytics + diagnostics card (donut, badges, sparkline)
       let strongestAreas = specialtyStats.filter(s => s.answered > 0).sort((a, b) => b.score - a.score);
       let topStrong = strongestAreas.length > 0 ? strongestAreas[0] : null;
       let topWeakPerf = weakAreas && weakAreas.length > 0 ? weakAreas[0] : null;
-      
-      let performanceCardHtml = `
-      <div class="dash-card" style="display:flex; flex-direction:column;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-              <h2 class="dash-card-title"><i class="fa-solid fa-chart-column" style="color:#007a7a; margin-right:8px;"></i>Your Performance</h2>
-              <select style="border:1px solid #e5e7eb; border-radius:6px; font-size:12px; color:#4b5563; padding:4px 8px; outline:none; background:white; cursor:pointer;">
-                  <option>Last 30 days</option>
-                  <option>All time</option>
-              </select>
-          </div>
-          
-          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:24px; margin-bottom:24px;">
-              <div style="display:flex; flex-direction:column; justify-content:center;">
-                  <div style="font-size:32px; font-weight:800; color:#111827; line-height:1;">${globalScore}%</div>
-                  <div style="color:#6b7280; font-size:13px; font-weight:500; margin-top:4px;">Average Score</div>
-                  <div style="color:#10b981; font-size:11px; font-weight:600; margin-top:8px; display:flex; align-items:center; gap:4px;">
-                      <i class="fa-solid fa-arrow-trend-up"></i> 4% <span style="color:#9ca3af; font-weight:400;">vs previous 30 days</span>
-                  </div>
-              </div>
-              <div style="display:flex; flex-direction:column; gap:8px;">
-                  <div style="display:flex; justify-content:space-between; font-size:13px;">
-                      <span style="color:#4b5563; font-weight:500;">Attempted</span>
-                      <span style="font-weight:700; color:#111827;">${totalAnswered}</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; font-size:13px;">
-                      <span style="color:#4b5563; font-weight:500;">Correct</span>
-                      <span style="font-weight:700; color:#10b981;">${totalCorrect}</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; font-size:13px;">
-                      <span style="color:#4b5563; font-weight:500;">Incorrect</span>
-                      <span style="font-weight:700; color:#e11d48;">${totalIncorrect}</span>
-                  </div>
-              </div>
-          </div>
-          
-          <div style="border-top:1px solid #f3f4f6; padding-top:20px; display:flex; flex-direction:column; gap:12px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <div style="display:flex; align-items:center; gap:8px;">
-                      <i class="fa-solid fa-arrow-trend-down" style="color:#e11d48; width:16px; text-align:center;"></i>
-                      <span style="color:#4b5563; font-size:13px; font-weight:500;">Weakest: ${topWeakPerf ? (window.escapeHtml ? window.escapeHtml(topWeakPerf.name) : topWeakPerf.name) : 'N/A'}</span>
-                  </div>
-                  <span style="font-weight:700; font-size:13px; color:#111827;">${topWeakPerf ? topWeakPerf.score + '%' : '--'}</span>
-              </div>
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <div style="display:flex; align-items:center; gap:8px;">
-                      <i class="fa-solid fa-arrow-trend-up" style="color:#10b981; width:16px; text-align:center;"></i>
-                      <span style="color:#4b5563; font-size:13px; font-weight:500;">Strongest: ${topStrong ? (window.escapeHtml ? window.escapeHtml(topStrong.name) : topStrong.name) : 'N/A'}</span>
-                  </div>
-                  <span style="font-weight:700; font-size:13px; color:#111827;">${topStrong ? topStrong.score + '%' : '--'}</span>
-              </div>
-          </div>
-      </div>
-      `;
+      const escStrong = topStrong && window.escapeHtml ? window.escapeHtml(topStrong.name) : (topStrong ? topStrong.name : '');
+      const escWeak = topWeakPerf && window.escapeHtml ? window.escapeHtml(topWeakPerf.name) : (topWeakPerf ? topWeakPerf.name : '');
 
-      // Today's Focus Card
-      let focusCardHtml = '';
-      if (weakAreas && weakAreas.length > 0) {
-          const topWeak = weakAreas[0];
-          let recQs = 12;
-          const wStat = subjectStats[topWeak.name];
-          if (wStat) {
-              const unused = Math.max(0, wStat.total - wStat.answered);
-              recQs = unused > 0 ? Math.min(15, unused) : 10;
-          }
-          
-          focusCardHtml = `
-          <div class="dash-card" style="background: #f8fafc; display:flex; flex-direction:column; justify-content:center; border: 1px solid #e2e8f0;">
-              <h2 class="dash-card-title" style="margin-bottom:12px; color:#007a7a;"><i class="fa-solid fa-microscope" style="margin-right:8px;"></i>Today's Focus</h2>
-              <div style="font-size:16px; font-weight:700; color:#111827; margin-bottom:4px;">${window.escapeHtml ? window.escapeHtml(topWeak.name) : topWeak.name} &mdash; <span style="color:#e11d48; font-weight:600; font-size:14px;">Needs attention</span></div>
-              <div style="color:#6b7280; font-size:13px; margin-bottom:16px;">
-                  <i class="fa-solid fa-list-check" style="color:#9ca3af; margin-right:4px;"></i> ${recQs} questions recommended
-              </div>
-              <button onclick="window.startQBankSession('${activeQBankId}', '${safeBankName}', '${window.escapeHtml ? window.escapeHtml(topWeak.name).replace(/'/g, "\\'") : topWeak.name.replace(/'/g, "\\'")}')" style="background:transparent; border:1px solid #007a7a; color:#007a7a; border-radius:6px; padding:6px 16px; font-weight:600; font-size:13px; cursor:pointer; align-self:flex-start; transition:all 0.2s;" onmouseover="this.style.background='#007a7a'; this.style.color='#fff';" onmouseout="this.style.background='transparent'; this.style.color='#007a7a';">
-                  Start Review &rarr;
-              </button>
-          </div>
-          `;
+      // Donut geometry (SVG ring)
+      const _C = 2 * Math.PI * 54;
+      const _off = (_C * (1 - globalScore / 100)).toFixed(1);
+      const _donutColor = globalScore >= 70 ? '#007a7a' : (globalScore >= 50 ? '#D97706' : '#DC2626');
+
+      // Sparkline: current score of each recent session's subject, oldest -> newest
+      let _trendPts = [];
+      try {
+        (recentSessions || []).slice(0, 9).forEach(rs => {
+          let sc = null;
+          const st = rs && rs.subject ? subjectStats[rs.subject] : null;
+          if (st && st.answered > 0) sc = Math.round((st.correct / st.answered) * 100);
+          else if (rs && rs.subject === 'All Subjects' && totalAnswered > 0) sc = globalScore;
+          if (sc !== null) _trendPts.push(sc);
+        });
+        _trendPts.reverse();
+        if (totalAnswered > 0) _trendPts.push(globalScore);
+        _trendPts = _trendPts.slice(-10);
+      } catch (_) { _trendPts = totalAnswered > 0 ? [globalScore] : []; }
+      let _sparkHtml = '';
+      if (_trendPts.length >= 2) {
+        const W = 150, H = 36, P = 3;
+        const min = Math.min.apply(null, _trendPts), max = Math.max.apply(null, _trendPts);
+        const span = Math.max(1, max - min);
+        const stepX = (W - P * 2) / (_trendPts.length - 1);
+        const pts = _trendPts.map((v, i) => {
+          const x = (P + i * stepX).toFixed(1);
+          const y = (H - P - ((v - min) / span) * (H - P * 2)).toFixed(1);
+          return x + ',' + y;
+        }).join(' ');
+        const lastX = (P + (_trendPts.length - 1) * stepX).toFixed(1);
+        _sparkHtml = `
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;">
+            <polygon points="${P},${H} ${pts} ${lastX},${H}" fill="rgba(0,122,122,0.10)"></polygon>
+            <polyline points="${pts}" fill="none" stroke="#007a7a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          </svg>
+          <div class="clin-muted" style="font-size:11px; margin-top:4px;">Recent trend &middot; last ${_trendPts.length} blocks</div>`;
       } else {
-          focusCardHtml = `
-          <div class="dash-card" style="background: #f8fafc; display:flex; flex-direction:column; justify-content:center; border: 1px solid #e2e8f0;">
-              <h2 class="dash-card-title" style="margin-bottom:12px; color:#007a7a;"><i class="fa-solid fa-microscope" style="margin-right:8px;"></i>Today's Focus</h2>
-              <div style="font-size:14px; color:#6b7280; margin-bottom:16px;">You're doing great! No immediate weak areas detected.</div>
-              <button onclick="window.openExamPrepTab && window.openExamPrepTab()" style="background:transparent; border:1px solid #007a7a; color:#007a7a; border-radius:6px; padding:6px 16px; font-weight:600; font-size:13px; cursor:pointer; align-self:flex-start; transition:all 0.2s;" onmouseover="this.style.background='#007a7a'; this.style.color='#fff';" onmouseout="this.style.background='transparent'; this.style.color='#007a7a';">
-                  Start Mixed Block &rarr;
-              </button>
-          </div>
-          `;
+        _sparkHtml = `<div class="clin-empty">Trend appears after a few practice blocks.</div>`;
       }
 
-      // Quick Actions
-      let quickActionsHtml = `
-      <div class="dash-card full-width">
-          <h2 class="dash-card-title"><i class="fa-solid fa-bolt" style="color:#007a7a; margin-right:8px;"></i>Quick Actions</h2>
-          <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-top:16px;">
-              <div onclick="window.openExamPrepTab && window.openExamPrepTab()" style="background:#f9fafb; border:1px solid #f3f4f6; border-radius:8px; padding:12px 16px; cursor:pointer; display:flex; align-items:center; gap:12px; transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'; this.style.borderColor='#e5e7eb'; this.style.background='#f3f4f6';" onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='#f3f4f6'; this.style.background='#f9fafb';">
-                  <div style="background:#e6f2f2; width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                      <i class="fa-solid fa-book-open text-[#007a7a] text-[16px]"></i>
+      const _scoreBadge = globalScore >= 70
+          ? `<span class="clin-badge clin-badge-good">High performance</span>`
+          : (globalScore >= 50
+              ? `<span class="clin-badge clin-badge-warn">Developing</span>`
+              : `<span class="clin-badge clin-badge-bad">Remediation needed</span>`);
+      const _weakRow = topWeakPerf
+          ? `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+                 <span style="font-size:12.5px; color:#334155; font-weight:600;">${escWeak}</span>
+                 <span class="clin-badge clin-badge-bad">${topWeakPerf.score}%</span>
+             </div>`
+          : '';
+      const _strongRow = topStrong
+          ? `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
+                 <span style="font-size:12.5px; color:#334155; font-weight:600;">${escStrong}</span>
+                 <span class="clin-badge clin-badge-good">${topStrong.score}%</span>
+             </div>`
+          : '';
+      // Never show the same topic as both weakest AND strongest (single-topic
+      // progress) — that looks broken. Require two distinct scored areas.
+      const _sameTopic = topWeakPerf && topStrong && topWeakPerf.name === topStrong.name;
+      const _diagBody = totalAnswered <= 0
+          ? `<div class="clin-empty">Diagnostics populate after you answer questions.</div>`
+          : (_sameTopic || !topWeakPerf || !topStrong
+              ? `<div class="clin-empty">More data needed to calculate strengths.</div>`
+              : `${_weakRow}${_strongRow}`);
+
+      let performanceCardHtml = `
+      <div class="clin-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <h2 class="clin-card-title" style="margin:0;"><i class="fa-solid fa-chart-column" style="color:#007a7a;"></i>Performance &amp; diagnostics</h2>
+              <a href="#" onclick="window.openPerformance && window.openPerformance(); return false;" style="color:#007a7a; font-size:11.5px; text-decoration:none; font-weight:600;">Full analytics</a>
+          </div>
+          <div class="clin-analytics">
+              <div style="display:flex; align-items:center; gap:16px;">
+                  <div style="position:relative; width:104px; height:104px; flex-shrink:0;">
+                      <svg width="104" height="104" viewBox="0 0 120 120" style="display:block;">
+                          <circle cx="60" cy="60" r="54" fill="none" stroke="#E2E8F0" stroke-width="12"></circle>
+                          <circle cx="60" cy="60" r="54" fill="none" stroke="${_donutColor}" stroke-width="12" stroke-linecap="round"
+                              stroke-dasharray="${_C.toFixed(1)}" stroke-dashoffset="${_off}" transform="rotate(-90 60 60)"></circle>
+                          <text x="60" y="80" text-anchor="middle" font-size="9" font-weight="700" letter-spacing="1.5" fill="#64748B" font-family="Inter,-apple-system,'Segoe UI',Roboto,sans-serif">AVG SCORE</text>
+                      </svg>
+                      <div class="donut-text-overlay" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none; text-align:center;">
+                          <div style="font-size:21px; font-weight:700; color:#0F172A; line-height:1; font-family:Inter,-apple-system,'Segoe UI',Roboto,sans-serif;">${globalScore}%</div>
+                      </div>
                   </div>
-                  <div style="flex:1;">
-                      <div style="font-weight:700; color:#111827; font-size:13px; margin-bottom:2px;">Start a New Session</div>
-                      <div style="color:#6b7280; font-size:11px;">Customize your practice</div>
+                  <div>
+                      <div style="margin-bottom:6px;">${_scoreBadge}</div>
+                      <div style="font-size:12.5px; color:#334155; font-weight:600;">${totalAnswered} <span style="font-weight:400;" class="clin-muted">attempted</span> &middot; ${totalCorrect} <span style="font-weight:400;" class="clin-muted">correct</span> &middot; ${totalIncorrect} <span style="font-weight:400;" class="clin-muted">incorrect</span></div>
+                      <div class="clin-muted" style="font-size:11.5px; font-weight:400; margin-top:2px;">${totalQuestions} questions in bank</div>
                   </div>
-                  <i class="fa-solid fa-arrow-right text-[#007a7a] text-[12px] opacity-60"></i>
               </div>
-              <div onclick="window.openFlashcardsExplorer && window.openFlashcardsExplorer()" style="background:#f9fafb; border:1px solid #f3f4f6; border-radius:8px; padding:12px 16px; cursor:pointer; display:flex; align-items:center; gap:12px; transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'; this.style.borderColor='#e5e7eb'; this.style.background='#f3f4f6';" onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='#f3f4f6'; this.style.background='#f9fafb';">
-                  <div style="background:#e6f2f2; width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                      <i class="fa-solid fa-layer-group text-[#007a7a] text-[16px]"></i>
-                  </div>
-                  <div style="flex:1;">
-                      <div style="font-weight:700; color:#111827; font-size:13px; margin-bottom:2px;">Review Flashcards</div>
-                      <div style="color:#6b7280; font-size:11px;">Reinforce what you learn</div>
-                  </div>
-                  <i class="fa-solid fa-arrow-right text-[#007a7a] text-[12px] opacity-60"></i>
+              <div>
+                  <div class="clin-muted" style="font-size:11px; font-weight:700; letter-spacing:.05em; margin-bottom:2px;">WEAKEST / STRONGEST</div>
+                  ${_diagBody}
               </div>
-              <div onclick="window.openPlanner && window.openPlanner()" style="background:#f9fafb; border:1px solid #f3f4f6; border-radius:8px; padding:12px 16px; cursor:pointer; display:flex; align-items:center; gap:12px; transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'; this.style.borderColor='#e5e7eb'; this.style.background='#f3f4f6';" onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='#f3f4f6'; this.style.background='#f9fafb';">
-                  <div style="background:#e6f2f2; width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                      <i class="fa-regular fa-calendar text-[#007a7a] text-[16px]"></i>
-                  </div>
-                  <div style="flex:1;">
-                      <div style="font-weight:700; color:#111827; font-size:13px; margin-bottom:2px;">View Study Plan</div>
-                      <div style="color:#6b7280; font-size:11px;">Stay on track</div>
-                  </div>
-                  <i class="fa-solid fa-arrow-right text-[#007a7a] text-[12px] opacity-60"></i>
+              <div>
+                  <div class="clin-muted" style="font-size:11px; font-weight:700; letter-spacing:.05em; margin-bottom:6px;">TREND</div>
+                  ${_sparkHtml}
               </div>
           </div>
       </div>
       `;
 
-      // Weakest Areas
+      // Card 2: Question Pool metrics (stacked horizontal bars)
+      const _poolRows = totalQuestions > 0 ? [
+          { label: 'Used', val: totalAnswered, pct: Math.round((totalAnswered / totalQuestions) * 100), color: '#334155' },
+          { label: 'Unused', val: totalUnused, pct: Math.round((totalUnused / totalQuestions) * 100), color: '#94A3B8' },
+          { label: 'Incorrect pool', val: totalIncorrect, pct: Math.round((totalIncorrect / totalQuestions) * 100), color: '#EF4444' }
+      ] : [];
+      let focusCardHtml = `
+      <div class="clin-card" style="display:flex; flex-direction:column;">
+          <h2 class="clin-card-title"><i class="fa-solid fa-layer-group" style="color:#007a7a;"></i>Question pool</h2>
+          ${totalQuestions > 0 ? `
+          <div style="display:block; width:100%; margin-top:2px;">
+              ${_poolRows.map((r, i) => `
+              <div class="metric-row" style="display:block; width:100%;${i < _poolRows.length - 1 ? ' margin-bottom:12px;' : ''}">
+                  <div style="display:flex; justify-content:space-between; align-items:center; width:100%; font-size:13px; margin:0 0 4px 0; padding:0;">
+                      <span style="font-weight:500; color:#475569; margin:0; padding:0;">${r.label}</span>
+                      <span style="font-weight:600; color:#0F172A; margin:0; padding:0;">${r.val.toLocaleString()} (${r.pct}%)</span>
+                  </div>
+                  <div class="clin-pool-track" style="display:block; width:100%; height:6px; background-color:#E2E8F0; border-radius:999px; overflow:hidden; margin:0; padding:0;"><div class="clin-pool-fill" style="display:block; height:100%; width:${r.pct}%; background-color:${r.color}; border-radius:999px; margin:0; padding:0;"></div></div>
+              </div>`).join('')}
+          </div>
+          <div class="clin-muted" style="font-size:11.5px; margin-top:16px;">${totalQuestions.toLocaleString()} questions in bank</div>
+          ` : `<div class="clin-empty">No questions in this bank yet.</div>`}
+      </div>
+      `;
+
+      // Quick Actions (compact clinical)
+      const _qa = (fn, icon, title, sub) => `
+          <div onclick="${fn}" style="background:#fff; border:1px solid #E2E8F0; border-radius:6px; padding:10px 12px; cursor:pointer; display:flex; align-items:center; gap:10px;" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='#fff'">
+              <div style="background:#e6f2f2; width:30px; height:30px; border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                  <i class="${icon}" style="color:#007a7a; font-size:14px;"></i>
+              </div>
+              <div style="flex:1; min-width:0;">
+                  <div style="font-weight:700; color:#0F172A; font-size:12.5px;">${title}</div>
+                  <div class="clin-muted" style="font-size:11px;">${sub}</div>
+              </div>
+              <i class="fa-solid fa-chevron-right" style="color:#94A3B8; font-size:11px;"></i>
+          </div>`;
+      let quickActionsHtml = `
+      <div class="clin-card">
+          <h2 class="clin-card-title"><i class="fa-solid fa-bolt" style="color:#007a7a;"></i>Quick actions</h2>
+          <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+              ${_qa('window.openExamPrepTab && window.openExamPrepTab()', 'fa-solid fa-book-open', 'New session', 'Customize practice')}
+              ${_qa('window.openFlashcardsExplorer && window.openFlashcardsExplorer()', 'fa-solid fa-layer-group', 'Flashcards', 'Reinforce learning')}
+              ${_qa('window.openPlanner && window.openPlanner()', 'fa-regular fa-calendar', 'Study plan', 'Stay on track')}
+          </div>
+      </div>
+      `;
+
+      // Card 3: Priority Review / Daily Targets (compact data list)
       let weakestAreasHtml = '';
       if (weakAreas && weakAreas.length > 0) {
           let listHtml = '';
-          weakAreas.slice(0, 3).forEach((w, index) => {
+          weakAreas.slice(0, 5).forEach((w) => {
               const safeName = window.escapeHtml ? window.escapeHtml(w.name) : w.name;
               const safeNameClick = safeName.replace(/'/g, "\\'");
+              const wBadge = w.score >= 50
+                  ? `<span class="clin-badge clin-badge-warn">${w.score}%</span>`
+                  : `<span class="clin-badge clin-badge-bad">${w.score}%</span>`;
               listHtml += `
-              <div onclick="window.startQBankSession('${activeQBankId}', '${safeBankName}', '${safeNameClick}')" style="margin-bottom:${index === Math.min(weakAreas.length - 1, 2) ? '0' : '12px'}; padding:12px 16px; border-radius:8px; border:1px solid #f3f4f6; background:#f9fafb; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.borderColor='#e5e7eb'; this.style.background='#f3f4f6';" onmouseout="this.style.borderColor='#f3f4f6'; this.style.background='#f9fafb';">
-                  <div style="font-weight:700; color:#111827; font-size:14px; margin-bottom:4px;">
-                      ${safeName} &mdash; <span style="color:#e11d48;">${w.score}%</span>
+              <div class="clin-row" onclick="window.startQBankSession('${activeQBankId}', '${safeBankName}', '${safeNameClick}')" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
+                  <div style="flex:1; min-width:0;">
+                      <div style="font-size:12.5px; font-weight:600; color:#0F172A; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safeName}</div>
+                      <div class="clin-bar-track" style="margin-top:5px;"><div style="height:100%; width:${Math.max(0, Math.min(100, w.score))}%; background:#EF4444; border-radius:3px;"></div></div>
                   </div>
-                  <div style="color:#6b7280; font-size:12px; font-weight:500; display:flex; justify-content:space-between; align-items:center;">
-                      <span>${w.answered || 0} questions attempted</span>
-                      <span style="color:#007a7a; font-weight:600;">Review now &rarr;</span>
-                  </div>
+                  ${wBadge}
+                  <i class="fa-solid fa-chevron-right" style="font-size:11px; color:#94A3B8;"></i>
               </div>
               `;
           });
 
           weakestAreasHtml = `
-          <div class="dash-card" style="display:flex; flex-direction:column;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-                  <h2 class="dash-card-title"><i class="fa-solid fa-bullseye" style="color:#e11d48; margin-right:8px;"></i>Weakest Areas</h2>
-                  <a href="#" onclick="window.openPerformance && window.openPerformance(); return false;" style="color:#007a7a; font-size:12px; text-decoration:none; font-weight:500;">View All</a>
+          <div class="clin-card" style="display:flex; flex-direction:column;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                  <h2 class="clin-card-title" style="margin:0;"><i class="fa-solid fa-bullseye"></i>Priority review</h2>
+                  <a href="#" onclick="window.openPerformance && window.openPerformance(); return false;" style="color:#007a7a; font-size:11.5px; text-decoration:none; font-weight:600;">View all</a>
               </div>
               <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
                   ${listHtml}
@@ -1237,13 +1314,9 @@
           `;
       } else {
           weakestAreasHtml = `
-          <div class="dash-card" style="display:flex; flex-direction:column;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-                  <h2 class="dash-card-title"><i class="fa-solid fa-bullseye" style="color:#e11d48; margin-right:8px;"></i>Weakest Areas</h2>
-              </div>
-              <div style="flex:1; display:flex; align-items:center; justify-content:center; color:#6b7280; font-size:13px;">
-                  Not enough data yet. Keep practicing!
-              </div>
+          <div class="clin-card" style="display:flex; flex-direction:column;">
+              <h2 class="clin-card-title"><i class="fa-solid fa-bullseye"></i>Priority review</h2>
+              <div class="clin-empty">No weak areas yet — answer more questions to reveal priority targets.</div>
           </div>
           `;
       }
@@ -1253,50 +1326,172 @@
       `;
 
       let html = `
-        <div class="p-gutter w-full animate-[fade-in_0.5s_ease-out] max-w-[1200px] mx-auto" style="padding-top:32px; padding-bottom:64px;">
+        <div class="clin-wrap w-full max-w-[1200px] mx-auto" style="padding:20px 20px 96px;">
             ${plannerInlineHtml}
             ${headerHtml}
-            
-            <div class="dashboard-grid">
+            <div class="clin-rowblock clin-grid-top">
                 ${continueCardHtml}
                 ${focusCardHtml}
-                ${performanceCardHtml}
                 ${weakestAreasHtml}
+            </div>
+            <div class="clin-rowblock" style="margin-top:12px;">
+                ${performanceCardHtml}
+            </div>
+            <div class="clin-rowblock" style="margin-top:12px;">
                 ${quickActionsHtml}
             </div>
         </div>
         <style>
-        .dashboard-grid {
+        .clin-wrap {
+            font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #F8FAFC;
+            animation: clin-fade-in 0.4s ease-out;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        /* One box model for every row so all right edges share a pixel */
+        .clin-wrap, .clin-wrap *, .clin-wrap *::before, .clin-wrap *::after {
+            box-sizing: border-box;
+        }
+        .clin-rowblock { width: 100%; }
+        .clin-grid-top {
+            display: flex;
+            align-items: stretch;
+            gap: 12px;
+            width: 100%;
+        }
+        .clin-grid-top > .clin-card {
+            min-height: 212px;
+            min-width: 0;
+        }
+        .clin-grid-top > .clin-card:nth-child(1) { flex: 1.25; }
+        .clin-grid-top > .clin-card:nth-child(2) { flex: 1; }
+        .clin-grid-top > .clin-card:nth-child(3) { flex: 1; }
+        .clin-card {
+            background: #fff;
+            border: 1px solid #E2E8F0;
+            border-radius: 6px;
+            padding: 14px 16px;
+            box-shadow: none;
+            width: 100%;
+        }
+        .clin-card-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #64748B;
+            margin: 0 0 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .clin-card-title i {
+            font-size: 12px;
+            color: #007a7a;
+        }
+        .clin-btn-primary {
+            background: #007a7a;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 9px 18px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .clin-btn-primary:hover { background: #006666; }
+        .clin-bar-track {
+            height: 5px;
+            background: #EDF2F7;
+            border-radius: 3px;
+            overflow: hidden;
+            width: 100%;
+        }
+        /* NOTE: pool bars intentionally use clin-pool-* names — the generic
+           .progress-bar-fill class is hijacked by global stylesheets
+           (teal !important override + shimmer animation). */
+        .clin-pool-track {
+            display: block;
+            width: 100%;
+            height: 6px;
+            background-color: #E2E8F0;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .clin-pool-fill {
+            display: block;
+            height: 100%;
+            border-radius: 999px;
+        }
+        .clin-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 9px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+        .clin-badge-good { color: #15803D; background: #DCFCE7; }
+        .clin-badge-bad { color: #C62828; background: #FBEAEA; }
+        .clin-badge-warn { color: #92400E; background: #FEF3C7; }
+        .clin-badge-mut { color: #475569; background: #F1F5F9; }
+        .clin-muted { color: #64748B; }
+        .clin-empty {
+            border: 1px solid #F1F5F9;
+            border-radius: 6px;
+            background: #FAFAFA;
+            color: #64748B;
+            text-align: center;
+            padding: 16px 12px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .clin-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 6px;
+            margin: 0 -6px;
+            border-bottom: 1px solid #F1F5F9;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .clin-row:last-child { border-bottom: none; }
+        .clin-analytics {
             display: grid;
-            grid-template-columns: 2fr 1fr;
-            grid-gap: 20px;
+            grid-template-columns: 1.25fr 1fr 1fr;
+            gap: 12px;
+            align-items: start;
         }
-        .full-width {
-            grid-column: 1 / -1;
+        @media (max-width: 1024px) {
+            .clin-grid-top { flex-direction: column; }
+            .clin-grid-top > .clin-card { min-height: 0; }
+            .clin-analytics { grid-template-columns: 1fr; }
         }
+        @keyframes clin-fade-in {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        /* Legacy fallback (dashboard-ux home-view widgets still use these) */
         .dash-card {
             background: #fff;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
-            border: 1px solid #f3f4f6;
+            border-radius: 6px;
+            padding: 14px 16px;
+            border: 1px solid #E2E8F0;
         }
         .dash-card-title {
-            font-size: 14px;
+            font-size: 11.5px;
             font-weight: 700;
-            color: #111827;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #64748B;
             margin: 0;
             display: flex;
             align-items: center;
-        }
-        @media (max-width: 1024px) {
-            .dashboard-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        @keyframes fade-in {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+            gap: 6px;
         }
         </style>
       `;
@@ -1527,15 +1722,7 @@
     window.hideAllMainViews && window.hideAllMainViews();
     const view = document.getElementById("qbank-home-view");
     if (view) view.style.display = "flex";
-    document.querySelectorAll('nav a').forEach(a => {
-        a.classList.remove('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-        a.classList.add('border-transparent', 'text-on-surface-variant', 'font-medium');
-    });
-    const homeTab = document.querySelector('nav a[data-path="home"]');
-    if (homeTab) {
-        homeTab.classList.remove('border-transparent', 'text-on-surface-variant', 'font-medium');
-        homeTab.classList.add('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-    }
+    if (window.setQBankNav) window.setQBankNav('home');
 
     currentIndex = 0;
     sessionAnswers = [];
@@ -1546,6 +1733,7 @@
   };
 
   window.startQBankSession = async function (qbankId, qbankName, targetSubject = null, reviewIncorrectsOnly = false) {
+    const myNav = nextNavToken();
     const area = document.getElementById("qbank-home-content");
     if (!area) return;
     
@@ -1590,9 +1778,10 @@
             setCachedQBank(qbankId, { updatedAt: catUpdated, questions: res.questions || [] });
          }
          
-         qData = cachedQBanks[qbankId];
-      }
-      
+          qData = cachedQBanks[qbankId];
+       }
+       if (navStale(myNav)) return;
+
       allQuestions = qData.questions;
       window.qbankProgress = qData.progress;
       const progress = window.qbankProgress;
@@ -1705,21 +1894,14 @@
     return { icon: "book-open", color, bg };
   };
   window.showQBankSubjects = async function(requestedQBankId = null) {
+      nextNavToken();
       // 1. Switch active view to qbank-home-view
       if (window.hideAllMainViews) window.hideAllMainViews();
       const view = document.getElementById("qbank-home-view");
       if (view) view.style.display = "flex";
 
       // 2. Update navigation active state
-      document.querySelectorAll('nav a').forEach(a => {
-          a.classList.remove('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-          a.classList.add('border-transparent', 'text-on-surface-variant', 'font-medium');
-      });
-      const browseTab = document.querySelector('nav a[data-path="browse"]');
-      if (browseTab) {
-          browseTab.classList.remove('border-transparent', 'text-on-surface-variant', 'font-medium');
-          browseTab.classList.add('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-      }
+      if (window.setQBankNav) window.setQBankNav('browse');
 
       const area = document.getElementById("qbank-home-content");
       if (!area) return;
@@ -1729,21 +1911,12 @@
 
       // Make sure the QBank data is loaded
       if (!cachedQBanks[activeQBankId] || !cachedQBanks[activeQBankId].questions) {
-          // Temporarily show a loader and fetch if not loaded
-          area.innerHTML = `
-          <div class="flex flex-col justify-center items-center h-64 gap-4">
-            <div class="press-wrapper" style="margin: 20px auto 0; display: flex; justify-content: center; align-items: center;">
-                <div class="press">
-                  <div class="sheet"></div><div class="roll"></div><div class="sheet"></div><div class="roll"></div>
-                  <div class="sheet"></div><div class="roll"></div><div class="sheet"></div><div class="sheet"></div>
-                  <div class="sheet"></div><div class="sheet"></div><div class="sheet"></div><div class="roll"></div>
-                </div>
-            </div>
-            <div class="text-on-surface-variant text-sm">Loading specialties...</div>
-          </div>`;
-          await window.openQBank(activeQBankId); 
-          // openQBank will load the questions and overwrite the HTML, so we must call showQBankSubjects again
-          setTimeout(() => window.showQBankSubjects(activeQBankId), 100);
+          // Load via startQBankSession (fetches this bank's questions, then
+          // renders its subjects directly). NOTE: openQBank() takes no bank
+          // argument and follows window.db.selectedQBankId, so delegating to
+          // it here rendered the WRONG bank's subjects.
+          const _nm = ((cachedCategories || []).find(qb => qb.id === activeQBankId) || {}).name || "Your QBank";
+          await window.startQBankSession(activeQBankId, _nm);
           return;
       }
 
@@ -2226,9 +2399,119 @@
         border-color: var(--accent-cyan, #2dd4bf);
         background-color: var(--accent-cyan-light, rgba(45, 212, 191, 0.05));
       }
+      /* Pre-submit picked state: calm brand-teal outline, NOT green/red.
+         Green = correct and red = wrong are applied only after submit.
+         Scoped to :not(.answered) so the picked style can never override
+         the post-submit correct/incorrect highlight. Must beat rebrand.css
+         .usmle-option rules which use !important. */
+      #qbank-options-container:not(.answered) .qbank-radio-input input:checked + label.usmle-option,
+      #qbank-options-container:not(.answered) .usmle-option.qbank-option-btn.selected {
+        background: #eef6f7 !important;
+        border-color: #0e7c86 !important;
+        color: #0a3d4a !important;
+        box-shadow: 0 0 0 1px #0e7c86 inset !important;
+      }
+      #qbank-options-container:not(.answered) .qbank-radio-input input:checked + label.usmle-option .usmle-option-letter,
+      #qbank-options-container:not(.answered) .usmle-option.qbank-option-btn.selected .usmle-option-letter {
+        color: #ffffff !important;
+        background: #0e7c86 !important;
+        border-radius: 6px !important;
+        padding: 1px 7px !important;
+        margin-right: 12px !important;
+        opacity: 1 !important;
+      }
+      body.dark-exam #qbank-options-container:not(.answered) .qbank-radio-input input:checked + label.usmle-option,
+      html.dark #qbank-options-container:not(.answered) .qbank-radio-input input:checked + label.usmle-option,
+      body.dark-exam #qbank-options-container:not(.answered) .usmle-option.qbank-option-btn.selected,
+      html.dark #qbank-options-container:not(.answered) .usmle-option.qbank-option-btn.selected {
+        background: rgba(14,124,134,0.18) !important;
+        border-color: #2dd4bf !important;
+        color: #eef4f5 !important;
+        box-shadow: 0 0 0 1px #2dd4bf inset !important;
+      }
+      body.dark-exam #qbank-options-container:not(.answered) .qbank-radio-input input:checked + label.usmle-option .usmle-option-letter,
+      html.dark #qbank-options-container:not(.answered) .qbank-radio-input input:checked + label.usmle-option .usmle-option-letter,
+      body.dark-exam #qbank-options-container:not(.answered) .usmle-option.qbank-option-btn.selected .usmle-option-letter,
+      html.dark #qbank-options-container:not(.answered) .usmle-option.qbank-option-btn.selected .usmle-option-letter {
+        color: #062a2e !important;
+        background: #2dd4bf !important;
+      }
+      /* Post-submit: guarantee green/red always win over any picked style. */
+      #qbank-options-container.answered .usmle-option.correct {
+        background: #e8f4ee !important;
+        border-color: #0f8a5f !important;
+        color: #0a5a3f !important;
+        box-shadow: none !important;
+      }
+      #qbank-options-container.answered .usmle-option.incorrect {
+        background: #fbeae7 !important;
+        border-color: #c0392b !important;
+        color: #7a2216 !important;
+        box-shadow: none !important;
+      }
+      body.dark-exam #qbank-options-container.answered .usmle-option.correct,
+      html.dark #qbank-options-container.answered .usmle-option.correct {
+        background: #123424 !important;
+        border-color: #0f8a5f !important;
+        color: #a7e3c4 !important;
+      }
+      body.dark-exam #qbank-options-container.answered .usmle-option.incorrect,
+      html.dark #qbank-options-container.answered .usmle-option.incorrect {
+        background: #3a1a14 !important;
+        border-color: #c0392b !important;
+        color: #f2b8ae !important;
+      }
+      .qbank-radio-input input:focus-visible + label.usmle-option {
+        outline: 2px solid #0e7c86 !important;
+        outline-offset: 2px;
+      }
     `;
     document.head.appendChild(style);
   }
+
+  // Keeps the visual .selected class in sync with the hidden radio/checkbox
+  // state so users see their pick BEFORE pressing Submit / Lock Answer.
+  // Pure :checked + label CSS is not enough because rebrand.css overrides
+  // it with !important rules.
+  window.qbankSyncOptionSelected = function () {
+    const container = document.getElementById("qbank-options-container");
+    if (!container || container.classList.contains("answered")) return;
+    const inputs = container.querySelectorAll('input[name="qbank-radio"]');
+    inputs.forEach((input) => {
+      const label = document.getElementById("qbank-opt-" + input.value)
+        || input.nextElementSibling;
+      if (!label) return;
+      if (input.checked) label.classList.add("selected");
+      else label.classList.remove("selected");
+      input.setAttribute("aria-checked", input.checked ? "true" : "false");
+    });
+  };
+
+  window.qbankWireOptionSelection = function () {
+    const container = document.getElementById("qbank-options-container");
+    if (!container) return;
+    const inputs = container.querySelectorAll('input[name="qbank-radio"]');
+    inputs.forEach((input) => {
+      input.addEventListener("change", () => {
+        if (container.classList.contains("answered")) return;
+        const isRadio = input.type === "radio";
+        if (isRadio) {
+          // Single-answer (party lock mode): clear peers, mark this one.
+          inputs.forEach((other) => {
+            const otherLabel = document.getElementById("qbank-opt-" + other.value)
+              || other.nextElementSibling;
+            if (otherLabel) otherLabel.classList.toggle("selected", other === input && input.checked);
+          });
+        } else {
+          const label = document.getElementById("qbank-opt-" + input.value)
+            || input.nextElementSibling;
+          if (label) label.classList.toggle("selected", input.checked);
+        }
+        window.qbankSyncOptionSelected();
+      });
+    });
+    window.qbankSyncOptionSelected();
+  };
 
   window.qbankRenderCurrent = function () {
     const area = document.getElementById("qbank-question-area");
@@ -2278,7 +2561,7 @@
         
         return `
         <div class="qbank-radio-input" style="position:relative; width:100%;">
-          <input type="${isMultiple ? 'checkbox' : 'radio'}" id="qbank-radio-input-${i}" name="qbank-radio" value="${i}" style="display:none;" ${!isMultiple && !inPartyMode ? 'onclick="event.preventDefault()"' : ''}>
+          <input type="${isMultiple ? 'checkbox' : 'radio'}" id="qbank-radio-input-${i}" name="qbank-radio" value="${i}" style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px; margin:0;" ${!isMultiple && !inPartyMode ? 'onclick="event.preventDefault()"' : ''} aria-label="Option ${String.fromCharCode(65 + i)}">
           <label class="usmle-option qbank-option-btn uiverse-label" id="qbank-opt-${i}" for="qbank-radio-input-${i}" ${!isMultiple && !inPartyMode ? `onclick="window.qbankSelectOption(${i}); event.preventDefault();"` : ""} style="display:flex; align-items:flex-start; width:100%; box-sizing:border-box;">
             <span class="usmle-option-letter" style="margin-right:12px; font-weight:800; opacity:0.8;">${String.fromCharCode(65 + i)}</span>
             <span class="usmle-option-text" style="flex:1;">${window.renderRichText ? window.renderRichText(opt) : (window.escapeHtml ? window.escapeHtml(opt) : opt)}</span>
@@ -2458,6 +2741,8 @@
     startTimer();
     
     window.qbankRenderSidebar();
+    // Wire pre-submit selected visuals (QCM + party lock mode).
+    if (window.qbankWireOptionSelection) window.qbankWireOptionSelection();
   };
 
   window.qbankSelectOption = async function (selectedIndex) {
@@ -2498,9 +2783,14 @@
     // Highlight UI
     const container = document.getElementById("qbank-options-container");
     const labels = container.querySelectorAll(".qbank-option-btn");
+    const inputsByIndex = container.querySelectorAll('input[name="qbank-radio"]');
+    // Lock the question: pre-submit picked style is scoped to :not(.answered),
+    // so adding this class guarantees green/red win after submit.
+    container.classList.add("answered");
     labels.forEach((label, i) => {
       label.style.pointerEvents = "none";
-      const input = label.querySelector("input");
+      label.classList.remove("selected");
+      const input = inputsByIndex[i] || document.getElementById("qbank-radio-input-" + i);
       if (input) input.disabled = true;
       
       if (correctIndices.includes(i)) {
@@ -2548,6 +2838,8 @@
       const studyBtn = document.getElementById("qbank-study-btn");
       if (studyBtn) {
         studyBtn.classList.add("qbank-study-glow");
+        // Auto-open study concept when wrong, as requested
+        window.generateStudyConcept(q.id);
       }
     }
     
@@ -2587,13 +2879,13 @@
 
   // Update peer percentages without re-rendering the question
   window.qbankUpdatePeerPercentages = async function(questionId, stats) {
-    // Reload threshold to get latest value
-    try {
-      const res = await fetch('/api/qbank?action=get_peer_stats_threshold');
-      const data = await res.json();
-      window.qbankPeerThreshold = data.threshold || 50;
-    } catch (e) {}
-    
+    // Use the cached threshold (loaded once per session). The old code
+    // refetched it on EVERY question render = 1 Firestore read per question.
+    if (!window.qbankPeerThreshold) {
+      window.qbankPeerThreshold = 50;
+      if (window._loadPeerThreshold) window._loadPeerThreshold();
+    }
+
     const peerThreshold = window.qbankPeerThreshold || 50;
     const isAdmin = window.isAdminCache || false;
     
@@ -2687,22 +2979,36 @@
     }
   }
 
-  // Load peer stats threshold from server (public endpoint)
+  // Load peer stats threshold from server (public endpoint).
+  // Cached 5 min client-side AND server-side: repeat dashboard opens and
+  // question renders cost zero extra fetches / zero Firestore reads.
   window._loadPeerThreshold = function() {
     try {
-      fetch('/api/qbank?action=get_peer_stats_threshold')
+      const now = Date.now();
+      if (window.qbankPeerThreshold && window.__peerThresholdTime &&
+          now - window.__peerThresholdTime < 5 * 60_000) {
+        return Promise.resolve(window.qbankPeerThreshold);
+      }
+      if (window.__peerThresholdPromise) return window.__peerThresholdPromise;
+      window.__peerThresholdPromise = fetch('/api/qbank?action=get_peer_stats_threshold')
         .then(res => res.json())
         .then(data => {
           window.qbankPeerThreshold = data.threshold || 50;
+          window.__peerThresholdTime = Date.now();
           console.log('[peer-stats] threshold loaded:', window.qbankPeerThreshold);
+          return window.qbankPeerThreshold;
         })
         .catch(err => {
           console.warn('Failed to load peer threshold:', err);
-          window.qbankPeerThreshold = 50;
-        });
+          window.qbankPeerThreshold = window.qbankPeerThreshold || 50;
+          return window.qbankPeerThreshold;
+        })
+        .finally(() => { window.__peerThresholdPromise = null; });
+      return window.__peerThresholdPromise;
     } catch (e) {
       console.warn('Error loading peer threshold:', e);
-      window.qbankPeerThreshold = 50;
+      window.qbankPeerThreshold = window.qbankPeerThreshold || 50;
+      return Promise.resolve(window.qbankPeerThreshold);
     }
   }
 
@@ -3068,7 +3374,8 @@
       
       const res = await apiPost("chat_question", {
         questionContext: qContext,
-        userMessage: val
+        userMessage: val,
+        lang: (window.qbankAiLang && window.qbankAiLang()) || "auto"
       });
       
       const aiMsg = document.createElement("div");
@@ -3138,6 +3445,7 @@
       delete cachedQBanks[activeQBankId];  // force full re-fetch
       preloadPromise = null;                // reset category list cache
       cachedCategories = null;
+      window.__qbanksMaxUpdatedAt = 0;      // reset publish-timestamp stamp
       
       // Clear IndexedDB cache for this qbank
       try {
@@ -3334,6 +3642,7 @@
       delete cachedQBanks[activeQBankId];
       preloadPromise = null;
       cachedCategories = null;
+      window.__qbanksMaxUpdatedAt = 0; // reset publish-timestamp stamp
       try {
         const db = await openQBankDB();
         const tx = db.transaction(STORE_NAME, "readwrite");
@@ -3625,6 +3934,34 @@
     if (rightCol) rightCol.style.display = "none";
   };
 
+  // Language for AI-generated QBank content (study concepts, tutor chat).
+  // Explicit site language when the student chose one; otherwise "auto" so
+  // the model matches the question's own language instead of defaulting
+  // to English.
+  window.qbankAiLang = function() {
+    try {
+      if (window.db && window.db.settings && window.db.settings.siteLanguage) {
+        return String(window.db.settings.siteLanguage).slice(0, 8);
+      }
+    } catch (_) {}
+    try {
+      const keys = ["omnote_site_language", "omnote_lang"];
+      for (const k of keys) {
+        const v = localStorage.getItem(k);
+        if (v && /^[a-zA-Z-]{2,8}$/.test(v)) return v.slice(0, 8);
+      }
+    } catch (_) {}
+    return "auto";
+  };
+
+  // Whether a cached study concept (tagged with its generation language)
+  // is usable for the requested language. Untagged legacy concepts were
+  // generated without any language instruction, i.e. in English.
+  window.qbankConceptUsable = function(taggedLang, wantLang) {
+    if (taggedLang) return taggedLang === wantLang;
+    return wantLang === "en";
+  };
+
   window.generateStudyConcept = async function(questionId) {
     const q = allQuestions.find(q => q.id === questionId);
     if (!q) return;
@@ -3635,7 +3972,9 @@
     
     rightCol.style.display = "flex";
 
-    if (q.studyConcept) {
+    const conceptLang = (window.qbankAiLang && window.qbankAiLang()) || "auto";
+
+    if (q.studyConcept && window.qbankConceptUsable(q.studyConceptLang, conceptLang)) {
       contentDiv.innerHTML = (window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(q.studyConcept)) : q.studyConcept;
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
       return;
@@ -3656,8 +3995,9 @@
       });
       if (getRes.ok) {
         const getData = await getRes.json();
-        if (getData.studyConcept) {
+        if (getData.studyConcept && window.qbankConceptUsable(getData.studyConceptLang, conceptLang)) {
           q.studyConcept = getData.studyConcept;
+          q.studyConceptLang = getData.studyConceptLang || null;
           contentDiv.innerHTML = (window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(q.studyConcept)) : q.studyConcept;
           if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
           return;
@@ -3684,6 +4024,7 @@
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           task: "qbank_study_concept",
+          lang: conceptLang,
           vars: { question: questionText, answer: correctAns, explanation: explanation }
         })
       });
@@ -3695,8 +4036,9 @@
       if (!parsedContent) throw new Error("AI returned empty response.");
       
       q.studyConcept = parsedContent;
+      q.studyConceptLang = conceptLang;
       contentDiv.innerHTML = (window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(parsedContent)) : parsedContent;
-      
+
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
 
       fetch("/api/qbank", {
@@ -3706,7 +4048,8 @@
           action: "save_study_concept",
           qbankId: currentQBankId,
           questionId: questionId,
-          studyConcept: parsedContent
+          studyConcept: parsedContent,
+          lang: conceptLang
         })
       }).catch(e => console.error("Failed to save study concept async", e));
 
@@ -3769,15 +4112,7 @@
       }
 
       // Update active nav class
-      document.querySelectorAll('nav a').forEach(a => {
-          a.classList.remove('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-          a.classList.add('border-transparent', 'text-on-surface-variant', 'font-medium');
-        });
-        const pt = document.querySelector('nav a[data-path="performance"]');
-        if (pt) {
-          pt.classList.remove('border-transparent', 'text-on-surface-variant', 'font-medium');
-          pt.classList.add('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-        }
+      if (window.setQBankNav) window.setQBankNav('performance');
 
       if (window.innerWidth < 1024 && typeof window.toggleSidebar === 'function') {
           // Close mobile sidebar if needed
@@ -4185,12 +4520,16 @@
            window.QBankParty.updateScore(100);
        }
        
-       const inputs = document.getElementsByName("qbank-radio");
-       inputs.forEach(r => {
-           r.disabled = true;
-           const val = parseInt(r.value, 10);
-           const label = r.closest('label');
-           if (correctIndices.includes(val)) {
+         const inputs = document.getElementsByName("qbank-radio");
+        const revealContainer = document.getElementById("qbank-options-container");
+        if (revealContainer) revealContainer.classList.add("answered");
+        inputs.forEach(r => {
+            r.disabled = true;
+            const val = parseInt(r.value, 10);
+            const label = document.getElementById("qbank-opt-" + val) || r.nextElementSibling;
+            if (!label) return;
+            label.classList.remove("selected");
+            if (correctIndices.includes(val)) {
                label.classList.add("correct");
                label.style.background = "rgba(34,197,94,0.1)";
                label.style.border = "1px solid #22c55e";
@@ -4238,15 +4577,7 @@
       }
       
       // Update Sidebar active state
-      document.querySelectorAll('nav a').forEach(a => {
-          a.classList.remove('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-          a.classList.add('border-transparent', 'text-on-surface-variant', 'font-medium');
-        });
-        const tab = document.querySelector('nav a[data-path="resources"]');
-        if (tab) {
-          tab.classList.remove('border-transparent', 'text-on-surface-variant', 'font-medium');
-          tab.classList.add('border-primary', 'bg-primary/10', 'text-primary', 'font-bold');
-        }
+      if (window.setQBankNav) window.setQBankNav('resources');
       
       let html = `<div style="max-width:1400px; margin:0 auto; width:100%; padding-bottom:40px;">
           <h2 style="font-size:1.8rem; font-weight:700; margin-bottom:8px; color:var(--text-primary);">Study Resources</h2>
@@ -4504,15 +4835,7 @@
           view.style.flexDirection = 'column';
       }
 
-      document.querySelectorAll('nav a').forEach(a => {
-          a.classList.remove('border-[#007a7a]', 'bg-[#007a7a]/5', 'text-[#007a7a]', 'font-bold');
-          a.classList.add('border-transparent', 'text-gray-600', 'font-medium');
-      });
-      const tab = document.querySelector('nav a[data-path="exam-prep"]');
-      if (tab) {
-          tab.classList.remove('border-transparent', 'text-gray-600', 'font-medium');
-          tab.classList.add('border-[#007a7a]', 'bg-[#007a7a]/5', 'text-[#007a7a]', 'font-bold');
-      }
+      if (window.setQBankNav) window.setQBankNav('exam-prep');
 
       if (view) view.innerHTML = `<div style="max-width:1000px; margin:0 auto; width:100%; padding-bottom:40px;">
           <h2 style="font-size:1.8rem; font-weight:700; margin-bottom:8px; color:#111827; display:flex; align-items:center; gap:12px;">

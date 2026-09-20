@@ -55,8 +55,8 @@
           
           <div class="wo-hero-content">
             <div class="wo-brand-hero">
-              <div class="wo-logo-hero"><img src="assets/logo.png" alt="Exora Logo" style="width: 100%; height: 100%; border-radius: 12px; object-fit: cover;"></div>
-              <span>Exora QBank</span>
+              <div class="wo-logo-hero"><img src="assets/logo.png" alt="CuraQ Logo" style="width: 100%; height: 100%; border-radius: 12px; object-fit: cover;"></div>
+              <span>CuraQ QBank</span>
             </div>
             
             <h1 class="wo-hero-title">Personalize your study experience.</h1>
@@ -77,8 +77,8 @@
         <div class="wo-form-area">
           <div class="wo-card">
             <div class="wo-brand-mobile">
-              <div class="wo-logo-hero" style="width:28px;height:28px;font-size:12px;"><img src="assets/logo.png" alt="Exora Logo" style="width: 100%; height: 100%; border-radius: 12px; object-fit: cover;"></div>
-              <span>Exora QBank</span>
+              <div class="wo-logo-hero" style="width:28px;height:28px;font-size:12px;"><img src="assets/logo.png" alt="CuraQ Logo" style="width: 100%; height: 100%; border-radius: 12px; object-fit: cover;"></div>
+              <span>CuraQ QBank</span>
             </div>
             <h2 class="wo-title">Welcome${defaultName ? " back, " + esc(defaultName.split(" ")[0]) : ""}! \u{1F44B}</h2>
             <p class="wo-sub">Let's set up your account preferences.</p>

@@ -4,14 +4,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exora | Free AI Study Workspace for Med Students</title>
+    <title>CuraQ | Free AI Study Workspace for Med Students</title>
     <meta name="description" content="The best free alternative to RemNote. An intelligent, AI-powered study workspace tailored for med students. Upload PDFs, generate flashcards, and master medical concepts for free.">
     <!-- JSON-LD Structured Data -->
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
       "@type": "WebApplication",
-      "name": "Exora",
+      "name": "CuraQ",
       "url": "https://omnote.online/app/",
       "applicationCategory": "EducationalApplication",
       "operatingSystem": "All",
@@ -46,7 +46,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/style.css?v=3">
     <link rel="stylesheet" href="css/rebrand.css">
-   <link rel="stylesheet" href="css/layout-polish.css">
+   <link rel="stylesheet" href="css/layout-polish.css?v=1">
   <link rel="stylesheet" href="css/dashboard.css?v=2">
   <link rel="stylesheet" href="css/workspace.css">
   <link rel="stylesheet" href="css/views-polish.css">
@@ -182,28 +182,42 @@
     <script>
       (function(){
          const quotes = document.querySelectorAll('.loader-quote');
-         if (!quotes.length) return;
-         let idx = 0;
-         window.__loaderInterval = setInterval(() => {
-            quotes[idx].classList.remove('active');
-            idx = (idx + 1) % quotes.length;
-            quotes[idx].classList.add('active');
-         }, 2500);
+         if (quotes.length) {
+           let idx = 0;
+           window.__loaderInterval = setInterval(() => {
+              quotes[idx].classList.remove('active');
+              idx = (idx + 1) % quotes.length;
+              quotes[idx].classList.add('active');
+           }, 2500);
+         }
       })();
       window.hideGlobalLoader = function() {
         const loader = document.getElementById('global-loader');
         if (loader && !loader.classList.contains('hidden')) {
           loader.classList.add('hidden');
           if (window.__loaderInterval) clearInterval(window.__loaderInterval);
+          if (window.__loaderFailsafe) { clearTimeout(window.__loaderFailsafe); window.__loaderFailsafe = null; }
           setTimeout(() => loader.remove(), 600);
+        } else if (loader && loader.classList.contains('hidden')) {
+          if (window.__loaderFailsafe) { clearTimeout(window.__loaderFailsafe); window.__loaderFailsafe = null; }
         }
       };
+      // Failsafe: never leave the dashboard stuck on the loader.
+      // If boot (Firebase / QBank API / Firestore) hangs or fails, force-hide
+      // the overlay so the user sees the app or an error instead of a spinner.
+      window.__loaderFailsafe = setTimeout(() => {
+        const loader = document.getElementById('global-loader');
+        if (loader && !loader.classList.contains('hidden')) {
+          try { console.warn('[loader] failsafe auto-hide after 12s'); } catch (_) {}
+          window.hideGlobalLoader();
+        }
+      }, 12000);
     </script>
 
     <!-- Full Screen Login Gatekeeper -->
     <div id="login-screen" style="display:none;">
         <div class="login-card">
-            <div class="login-logo"><img src="assets/logo.png" alt="Exora" class="login-logo-img" /><span>Exora</span></div>
+            <div class="login-logo"><img src="assets/logo.png" alt="CuraQ" class="login-logo-img" /><span>CuraQ</span></div>
             <p class="login-subtitle">Sign in to access your cloud workspace.</p>
 
             <input type="text" id="auth-name" class="login-input" placeholder="Your name (for sign up)" maxlength="40" autocomplete="name">
@@ -227,14 +241,14 @@
 <aside class="fixed left-0 top-0 h-full w-72 bg-surface-container-low z-50 flex flex-col border-r border-outline-variant/30">
     <!-- Top Header section matching UWorld's centered style -->
     <div class="pt-8 pb-6 flex flex-col items-center justify-center border-b border-outline-variant/30 text-center relative">
-        <img src="assets/logo.png" alt="Exora Logo" class="w-14 h-14 rounded-2xl shadow-lg mb-3 object-cover border border-outline-variant/30">
-        <h1 class="font-headline-lg text-[22px] text-[#007a7a] tracking-tight leading-tight mb-1">Exora</h1>
+        <img src="assets/logo.png" alt="CuraQ Logo" class="w-14 h-14 rounded-2xl shadow-lg mb-3 object-cover border border-outline-variant/30">
+        <h1 class="font-headline-lg text-[22px] text-[#007a7a] tracking-tight leading-tight mb-1">CuraQ</h1>
         <h2 class="text-[13px] text-on-surface-variant font-semibold px-4 uppercase tracking-wider" id="sidebar-qbank-name">Medical QBank</h2>
     </div>
 
     <!-- Navigation Menu -->
     <nav class="flex-1 w-full overflow-y-auto py-2 px-3">
-        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-[#007a7a] bg-[#e6f2f2] rounded-lg transition-colors font-bold" data-path="home" href="#" onclick="window.goHome();">
+        <a class="qbank-nav-active flex items-center w-full px-4 py-2.5 mb-1 text-[#007a7a] bg-[#e6f2f2] rounded-lg transition-colors font-bold" data-path="home" href="#" onclick="window.goHome();">
             <i class="fa-solid fa-home text-[16px] w-6 text-center mr-3"></i>
             <span class="font-sans text-[14px]">Home</span>
         </a>
@@ -277,42 +291,44 @@
 
 </aside>
 <div class="pl-72 w-full h-screen overflow-y-auto">
-<header class="fixed top-0 left-72 right-0 h-[64px] bg-white z-40 px-8 flex items-center justify-between border-b border-gray-200">
+<header class="fixed top-0 left-72 right-0 h-[60px] bg-white z-40 px-6 flex items-center justify-between border-b border-gray-200">
     <!-- Search -->
-    <div class="flex-1 max-w-3xl mr-6">
+    <div class="flex-1 max-w-2xl mr-6">
         <div class="relative flex items-center group w-full">
-            <i class="fa-solid fa-search absolute left-4 text-gray-400 text-[14px]"></i>
-            <input id="home-search-input" class="w-full h-10 pl-11 pr-14 bg-white border border-gray-200 rounded-lg text-gray-800 text-[14px] focus:outline-none focus:border-[#007a7a] focus:ring-1 focus:ring-[#007a7a] transition-shadow placeholder-gray-400" placeholder="Search subjects, chapters, or question IDs..." type="text" onkeydown="window.handleHomeSearch && window.handleHomeSearch(event)" oninput="window.handleHomeSearchInput && window.handleHomeSearchInput(event)" onfocus="window.handleHomeSearchFocus && window.handleHomeSearchFocus(event)"/>
-            <div class="absolute right-3 top-1/2 transform -translate-y-1/2 bg-gray-100 text-gray-500 text-[11px] font-bold px-2 py-1 rounded">Ctrl K</div>
-            <div id="home-search-dropdown" class="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-lg z-[1001] hidden max-h-80 overflow-y-auto rounded-b-lg mt-1"></div>
+            <i class="fa-solid fa-search absolute left-3 text-gray-400 text-[14px]"></i>
+            <input id="home-search-input" class="w-full h-9 pl-9 pr-12 bg-gray-50 border border-transparent rounded text-gray-800 text-[13px] focus:outline-none focus:bg-white focus:border-[#007a7a] focus:ring-1 focus:ring-[#007a7a] transition-all placeholder-gray-400" placeholder="Search subjects, chapters, or question IDs..." type="text" onkeydown="window.handleHomeSearch && window.handleHomeSearch(event)" oninput="window.handleHomeSearchInput && window.handleHomeSearchInput(event)" onfocus="window.handleHomeSearchFocus && window.handleHomeSearchFocus(event)"/>
+            <div class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-[11px] font-semibold">Ctrl K</div>
+            <div id="home-search-dropdown" class="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-lg z-[1001] hidden max-h-80 overflow-y-auto rounded-b mt-1"></div>
         </div>
     </div>
     
     <!-- Right cluster -->
-    <div class="flex items-center gap-4 text-gray-600">
+    <div class="flex items-center gap-3 text-gray-600">
         <!-- Change QBank Button -->
-        <button onclick="window.openQBankSelection && window.openQBankSelection()" class="px-4 py-1.5 bg-[#f8fafc] hover:bg-[#e2e8f0] text-[#007a7a] text-[13px] font-bold rounded-full border border-[#e2e8f0] transition-colors flex items-center gap-2 mr-2">
-            <i class="fa-solid fa-book-open"></i> Change QBank
+        <button onclick="window.openQBankSelection && window.openQBankSelection()" class="px-3 py-1.5 text-gray-600 hover:text-[#007a7a] text-[13px] font-medium rounded transition-colors flex items-center gap-2 mr-1">
+            <i class="fa-solid fa-book-open text-[14px]"></i> Change QBank
         </button>
         
         <!-- Notifications with badge -->
-        <button id="notif-bell" onclick="window.toggleNotifications && window.toggleNotifications()" class="relative hover:text-gray-900 transition-colors text-[18px]">
+        <button id="notif-bell" onclick="window.toggleNotifications && window.toggleNotifications()" class="relative text-gray-500 hover:text-[#007a7a] transition-colors text-[16px] w-8 h-8 flex items-center justify-center rounded hover:bg-gray-50">
             <i class="fa-regular fa-bell"></i>
-            <span id="notif-bell-badge" style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;background:#ef4444;border-radius:50%;border:1px solid white;"></span>
+            <span id="notif-bell-badge" style="position:absolute;top:6px;right:6px;width:6px;height:6px;background:#ef4444;border-radius:50%;"></span>
         </button>
         
+        <div class="h-5 w-[1px] bg-gray-200 mx-1"></div>
+        
         <!-- Profile Pill -->
-        <div class="flex items-center gap-3 cursor-pointer hover:bg-gray-50 p-1.5 rounded-full transition-colors border border-transparent hover:border-gray-200" onclick="window.openProfileSettings && window.openProfileSettings();">
-            <div class="w-8 h-8 rounded-full bg-[#007a7a] text-white flex items-center justify-center font-bold text-sm">
+        <div class="flex items-center gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded transition-colors" onclick="window.openProfileSettings && window.openProfileSettings();">
+            <div class="w-7 h-7 rounded bg-[#164e63] text-white flex items-center justify-center font-bold text-[12px]">
                 O
             </div>
-            <span class="font-bold text-gray-800 text-[14px]" id="header-user-name">Omar</span>
-            <i class="fa-solid fa-chevron-down text-[10px] text-gray-400 mr-2"></i>
+            <span class="font-medium text-gray-700 text-[13px]" id="header-user-name">Omar</span>
+            <i class="fa-solid fa-chevron-down text-[10px] text-gray-400 ml-1"></i>
         </div>
         
         <!-- Sign Out Button -->
-        <button onclick="window.handleLogout && window.handleLogout()" class="ml-2 px-3 py-1.5 text-[#c0392b] bg-[#fbeae7] hover:bg-[#fadbd8] rounded-full transition-colors flex items-center gap-2 font-bold text-[13px]" title="Sign Out">
-            <i class="fa-solid fa-sign-out-alt"></i> Sign out
+        <button onclick="window.handleLogout && window.handleLogout()" class="ml-1 text-gray-400 hover:text-[#c0392b] transition-colors w-8 h-8 flex items-center justify-center rounded hover:bg-red-50" title="Sign Out">
+            <i class="fa-solid fa-arrow-right-from-bracket text-[15px]"></i>
         </button>
     </div>
 </header>
@@ -387,7 +403,7 @@
 
                     <!-- Bottom SRS Actions (SM-2) -->
                     <div class="usmle-action-bar" id="srs-buttons" style="display:none;">
-                        <button class="usmle-proceed-btn usmle-btn-forgot" onclick="submitReview('again')" title="Forgot — reset (1)"><span style="font-weight:800;">1</span> · Again</button>
+                        <button class="usmle-proceed-btn usmle-btn-forgot" onclick="submitReview('again')" title="Forgot - reset (1)"><span style="font-weight:800;">1</span> · Again</button>
                         <button class="usmle-proceed-btn" style="background:linear-gradient(135deg,#f59e0b,#f97316);color:#fff;" onclick="submitReview('hard')" title="Hard (2)"><span style="font-weight:800;">2</span> · Hard</button>
                         <button class="usmle-proceed-btn usmle-btn-easy" onclick="submitReview('good')" title="Good (3)"><span style="font-weight:800;">3</span> · Good</button>
                         <button class="usmle-proceed-btn" style="background:linear-gradient(135deg,#06b6d4,#3b82f6);color:#fff;" onclick="submitReview('easy')" title="Easy (4)"><span style="font-weight:800;">4</span> · Easy</button>
@@ -565,7 +581,7 @@
         <!-- Global Loading Overlay -->
         <div id="global-loading-overlay" style="display: none;">
             <div class="loading-content" style="background: transparent; border: none; box-shadow: none; max-width: 500px;">
-                <h2 id="loading-title" style="font-size: 1.5rem; margin-bottom: 12px; font-weight: 600; background: none; -webkit-text-fill-color: var(--text-primary);">Exora AI Extracting Flashcards...</h2>
+                <h2 id="loading-title" style="font-size: 1.5rem; margin-bottom: 12px; font-weight: 600; background: none; -webkit-text-fill-color: var(--text-primary);">CuraQ AI Extracting Flashcards...</h2>
                 <div id="loading-text" class="loading-message" style="margin-bottom: 30px; font-size: 1rem; color: var(--text-muted); max-width: 100%;">Reading the whole textbook in 3 seconds...</div>
                 <div class="press-wrapper" style="margin: 20px auto 0; display: flex; justify-content: center; align-items: center;">
                     <div class="press">
@@ -707,7 +723,7 @@
                     </div>
                     <div id="admin-panel-examprep" class="admin-tab-panel" style="display:none;">
                         <h2 style="font-size:1.4rem; font-weight:800; color:var(--text-primary); margin-bottom:6px;">Exam Prep Sub-Banks</h2>
-                        <p style="font-size:0.9rem; color:var(--text-secondary); margin:0 0 20px 0;">Standalone mini question-banks for past exams. They are managed exactly like regular qbanks (add/import questions, lock, resources) but appear only under the student <b>Exam Prep</b> tab — never in the main bank picker.</p>
+                        <p style="font-size:0.9rem; color:var(--text-secondary); margin:0 0 20px 0;">Standalone mini question-banks for past exams. They are managed exactly like regular qbanks (add/import questions, lock, resources) but appear only under the student <b>Exam Prep</b> tab, never in the main bank picker.</p>
                         <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:20px; margin-bottom:24px; display:flex; flex-direction:column; gap:12px;">
                             <div style="display:flex; gap:10px; flex-wrap:wrap;">
                                 <input type="text" id="admin-ep-name" class="login-input" placeholder="Sub-bank name (e.g. Residency Exam 2025)" style="flex:2; min-width:240px;">
@@ -833,19 +849,19 @@
     <script src="js/session-restore.js"></script>
     <script src="js/cloze.js"></script>
 
-    <script src="js/planner.js"></script>
-    <script src="js/app.js?v=2"></script>
+    <script src="js/planner.js?v=1"></script>
+    <script src="js/app.js?v=3"></script>
 
     <script src="js/srs.js"></script>
     <script src="js/editor.js"></script>
     <script src="js/pdf.js"></script>
     <script src="js/ai.js"></script>
     <script src="js/full-exam.js"></script>
-    <script src="js/summary.js"></script>
+    <script src="js/summary.js?v=1.1"></script>
     <script src="js/timer.js"></script>
     <script src="js/schedule.js"></script>
     <script src="js/draw.js"></script>
-    <script src="js/flashcards.js"></script>
+    <script src="js/flashcards.js?v=1"></script>
     <script src="js/deck-import.js?v=1"></script>
     <script src="js/welcome.js?v=1"></script>
     <script src="js/rich-render.js?v=4"></script>
@@ -863,7 +879,7 @@
     <script src="js/book-mode.js?v=2"></script>
     <script src="js/study-party.js?v=2"></script>
     <script src="js/qbank-party.js?v=1"></script>
-    <script src="js/qbank.js?v=16"></script>
+    <script src="js/qbank.js?v=25"></script>
 
     <script src="js/whiteboard.js"></script>
     <script src="js/mindmap.js"></script>

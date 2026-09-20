@@ -60,7 +60,8 @@ document.addEventListener('contextmenu', (e) => {
 function handleTextSelection(e) {
     const popover = document.getElementById('selection-popover');
 
-    // Ignore clicks inside the popover itself
+    // Ignore clicks inside the popover itself (guard against null when element absent)
+    if (!popover) return;
     if (popover.contains(e.target)) return;
 
     // Get selection
@@ -173,6 +174,7 @@ function showPopoverAtRect(rect) {
 
 function hidePopover() {
     const popover = document.getElementById('selection-popover');
+    if (!popover) return;
     popover.classList.remove('active');
     popoverActive = false;
     currentSelection = "";
@@ -181,7 +183,7 @@ function hidePopover() {
 function hidePopoverIfClickOutside(e) {
     if (!popoverActive) return;
     const popover = document.getElementById('selection-popover');
-    if (!popover.contains(e.target)) {
+    if (!popover || !popover.contains(e.target)) {
         // We defer hide so mouseup has a chance to catch a new selection
         setTimeout(() => {
             const sel = window.getSelection().toString().trim();
