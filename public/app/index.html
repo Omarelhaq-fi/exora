@@ -789,6 +789,33 @@
             auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
         } catch (_) {}
 
+        // Shared users_index/{uid} read — 60s memory cache + in-flight
+        // dedupe. Boot alone fired this get 2-3x (welcome check, plan
+        // lookup, onboarding check); now the 2nd/3rd cost 0 reads.
+        window.__usersIndexCache = {};
+        window.getUsersIndexDoc = function (uid, force) {
+            if (!uid) return Promise.resolve({ exists: false, data: null });
+            const now = Date.now();
+            const hit = window.__usersIndexCache[uid];
+            if (!force && hit) {
+                if (hit.promise) return hit.promise;
+                if (now - hit.time < 60_000) return Promise.resolve(hit);
+            }
+            const p = fsdb.collection("users_index").doc(uid).get().then((snap) => {
+                const rec = { exists: snap.exists, data: snap.exists ? snap.data() : null, time: Date.now() };
+                window.__usersIndexCache[uid] = rec;
+                return rec;
+            }).catch((e) => {
+                if (window.__usersIndexCache[uid] && window.__usersIndexCache[uid].promise) delete window.__usersIndexCache[uid];
+                throw e;
+            });
+            window.__usersIndexCache[uid] = { promise: p, time: now };
+            return p;
+        };
+        window.invalidateUsersIndexDoc = function (uid) {
+            try { if (uid && window.__usersIndexCache) delete window.__usersIndexCache[uid]; } catch (_) {}
+        };
+
         window.syncDbToCloud = async function (dbObj) {
             const user = auth.currentUser;
             if (!user) return;
@@ -802,6 +829,17 @@
                     }
                     return value;
                 });
+                // Dirty-check: skip both writes when the payload is identical
+                // to the last successful sync (clean site opens = 0 writes).
+                try {
+                    let h = 0;
+                    for (let i = 0; i < safeStr.length; i++) h = ((h * 31 + safeStr.charCodeAt(i)) | 0);
+                    const hs = h + ":" + safeStr.length;
+                    const lsKey = "omnote_cloud_hash_" + user.uid;
+                    if (window.__lastCloudHash === hs) return;
+                    try { if (localStorage.getItem(lsKey) === hs) { window.__lastCloudHash = hs; return; } } catch (_) {}
+                    window.__pendingCloudHash = { hs: hs, lsKey: lsKey };
+                } catch (_) {}
                 // Firestore has a 1MB per-document limit; store JSON string
                 await fsdb.collection('users').doc(user.uid).set({
                     data: safeStr,
@@ -815,6 +853,16 @@
                     docCount: docCount,
                     flashcardCount: flashcardCount
                 }, { merge: true });
+                // Mark clean only after BOTH writes succeeded.
+                try {
+                    const pend = window.__pendingCloudHash;
+                    if (pend) {
+                        window.__lastCloudHash = pend.hs;
+                        try { localStorage.setItem(pend.lsKey, pend.hs); } catch (_) {}
+                        try { window.invalidateUsersIndexDoc && window.invalidateUsersIndexDoc(user.uid); } catch (_) {}
+                    }
+                } catch (_) {}
+                try { window.__pendingCloudHash = null; } catch (_) {}
             } catch (e) {
                 console.error("Firestore sync error", e);
                 alert("Firestore Error: " + e.message + "\nYour Firestore rules might be blocking writes.");
