@@ -2449,6 +2449,12 @@
         color: #7a2216 !important;
         box-shadow: none !important;
       }
+      #qbank-options-container.answered .usmle-option.partial {
+        background: #fef9c3 !important;
+        border-color: #eab308 !important;
+        color: #713f12 !important;
+        box-shadow: none !important;
+      }
       body.dark-exam #qbank-options-container.answered .usmle-option.correct,
       html.dark #qbank-options-container.answered .usmle-option.correct {
         background: #123424 !important;
@@ -2460,6 +2466,12 @@
         background: #3a1a14 !important;
         border-color: #c0392b !important;
         color: #f2b8ae !important;
+      }
+      body.dark-exam #qbank-options-container.answered .usmle-option.partial,
+      html.dark #qbank-options-container.answered .usmle-option.partial {
+        background: rgba(234,179,8,0.15) !important;
+        border-color: #eab308 !important;
+        color: #fde68a !important;
       }
       .qbank-radio-input input:focus-visible + label.usmle-option {
         outline: 2px solid #0e7c86 !important;
@@ -2770,11 +2782,16 @@
     currentSelectedIndices = selectedIndices;
 
     let isCorrect = false;
+    // Partially correct: QCM subset with no wrong picks (e.g. correct=A,B,C and picked=A,B)
+    let isPartial = false;
     if (isMultiple) {
       if (selectedIndices.length === correctIndices.length) {
         const sortedSelected = [...selectedIndices].sort();
         const sortedCorrect = [...correctIndices].sort();
         isCorrect = sortedSelected.every((v, i) => v === sortedCorrect[i]);
+      }
+      if (!isCorrect && selectedIndices.length > 0 && selectedIndices.every((v) => correctIndices.includes(v)) && selectedIndices.length < correctIndices.length) {
+        isPartial = true;
       }
     } else {
       isCorrect = correctIndices.includes(selectedIndex);
@@ -2793,7 +2810,14 @@
       const input = inputsByIndex[i] || document.getElementById("qbank-radio-input-" + i);
       if (input) input.disabled = true;
       
-      if (correctIndices.includes(i)) {
+      if (isPartial && selectedIndices.includes(i) && correctIndices.includes(i)) {
+        // User's picked subset: correct but incomplete -> yellow so their answer stays visible
+        label.classList.add("partial");
+        label.style.background = "rgba(234,179,8,0.12)";
+        label.style.border = "2px solid #eab308";
+        label.style.borderRadius = "12px";
+        label.style.padding = "16px 20px";
+      } else if (correctIndices.includes(i)) {
         label.classList.add("correct");
         label.style.background = "rgba(34,197,94,0.1)";
         label.style.border = "2px solid #22c55e";
@@ -2813,6 +2837,8 @@
     
     if (isCorrect) {
       resultHeader.innerHTML = '<span style="color:#22c55e;"><i data-lucide="check-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Correct</span>';
+    } else if (isPartial) {
+      resultHeader.innerHTML = '<span style="color:#eab308;"><i data-lucide="check-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Partially correct</span>';
     } else {
       resultHeader.innerHTML = '<span style="color:#f43f5e;"><i data-lucide="x-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Incorrect</span>';
       
@@ -2850,6 +2876,7 @@
     // Update local progress so sidebar icon shows immediately
     const p = window.qbankProgress[q.id] || {};
     p.correct = isCorrect;
+    p.partial = isPartial;
     p.timeTakenMs = currentQuestionTimeMs;
     window.qbankProgress[q.id] = p;
     window.qbankRenderSidebar();
@@ -3074,10 +3101,26 @@
     const p = window.qbankProgress[q.id] || {};
     const newMarked = !p.marked;
     
-    // Optimistic UI update
+    // Optimistic UI update (in-place only: do NOT re-render the question,
+    // otherwise the current checkbox/radio selection, timer and revealed
+    // answer would reset mid-question)
     p.marked = newMarked;
     window.qbankProgress[q.id] = p;
-    window.qbankRenderCurrent();
+    try {
+      let btn = null;
+      if (window.event && window.event.target && window.event.target.closest) {
+        btn = window.event.target.closest('button');
+      }
+      if (!btn) {
+        const all = document.querySelectorAll('[onclick="window.qbankToggleMark()"]');
+        if (all && all.length) btn = all[0];
+      }
+      if (btn) {
+        btn.style.color = newMarked ? 'var(--accent-cyan)' : 'var(--text-secondary)';
+        btn.innerHTML = `<i class="fa-solid fa-bookmark" style="font-size:12px;${newMarked ? 'color:var(--accent-cyan);' : ''}"></i> ${newMarked ? 'Marked' : 'Mark'}`;
+      }
+    } catch (e) {}
+    window.qbankRenderSidebar();
     
     // Background save
     if (currentQBankId) {
@@ -4510,53 +4553,64 @@
        
        const myLock = window.QBankParty.state.members.find(m => m.uid === uid)?.lockedAnswer || [];
        
-       let isCorrect = false;
-       if (myLock.length === correctIndices.length && myLock.every(v => correctIndices.includes(v))) {
-           isCorrect = true;
-       }
-       
-       if (isCorrect && window.lastScoredQuestionId !== q.id) {
-           window.lastScoredQuestionId = q.id;
-           window.QBankParty.updateScore(100);
-       }
-       
-         const inputs = document.getElementsByName("qbank-radio");
-        const revealContainer = document.getElementById("qbank-options-container");
-        if (revealContainer) revealContainer.classList.add("answered");
-        inputs.forEach(r => {
-            r.disabled = true;
-            const val = parseInt(r.value, 10);
-            const label = document.getElementById("qbank-opt-" + val) || r.nextElementSibling;
-            if (!label) return;
-            label.classList.remove("selected");
-            if (correctIndices.includes(val)) {
-               label.classList.add("correct");
-               label.style.background = "rgba(34,197,94,0.1)";
-               label.style.border = "1px solid #22c55e";
-               label.style.borderRadius = "8px";
-               label.style.padding = "8px";
-           } else if (myLock.includes(val)) {
-               label.classList.add("incorrect");
-               label.style.background = "rgba(244,63,94,0.1)";
-               label.style.border = "1px solid #f43f5e";
-               label.style.borderRadius = "8px";
-               label.style.padding = "8px";
-           }
-       });
-       
-       const expl = document.getElementById("qbank-explanation-container");
-       if (expl) expl.style.display = "block";
-       
-       const submitBtn = document.getElementById("qbank-submit-btn");
-       if (submitBtn) submitBtn.style.display = "none";
-       
-       const resultHeader = document.getElementById("qbank-result-header");
-       if (resultHeader) {
-           if (isCorrect) {
-               resultHeader.innerHTML = '<span style="color:#22c55e;"><i data-lucide="check-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Correct</span>';
-           } else {
-               resultHeader.innerHTML = '<span style="color:#f43f5e;"><i data-lucide="x-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Incorrect</span>';
-           }
+        let isCorrect = false;
+        let isPartial = false;
+        if (myLock.length === correctIndices.length && myLock.every(v => correctIndices.includes(v))) {
+            isCorrect = true;
+        } else if (myLock.length > 0 && myLock.every(v => correctIndices.includes(v)) && myLock.length < correctIndices.length && correctIndices.length > 1) {
+            isPartial = true;
+        }
+        
+        if (isCorrect && window.lastScoredQuestionId !== q.id) {
+            window.lastScoredQuestionId = q.id;
+            window.QBankParty.updateScore(100);
+        }
+        
+          const inputs = document.getElementsByName("qbank-radio");
+         const revealContainer = document.getElementById("qbank-options-container");
+         if (revealContainer) revealContainer.classList.add("answered");
+         inputs.forEach(r => {
+             r.disabled = true;
+             const val = parseInt(r.value, 10);
+             const label = document.getElementById("qbank-opt-" + val) || r.nextElementSibling;
+             if (!label) return;
+             label.classList.remove("selected");
+             if (isPartial && myLock.includes(val) && correctIndices.includes(val)) {
+                label.classList.add("partial");
+                label.style.background = "rgba(234,179,8,0.12)";
+                label.style.border = "1px solid #eab308";
+                label.style.borderRadius = "8px";
+                label.style.padding = "8px";
+            } else if (correctIndices.includes(val)) {
+                label.classList.add("correct");
+                label.style.background = "rgba(34,197,94,0.1)";
+                label.style.border = "1px solid #22c55e";
+                label.style.borderRadius = "8px";
+                label.style.padding = "8px";
+            } else if (myLock.includes(val)) {
+                label.classList.add("incorrect");
+                label.style.background = "rgba(244,63,94,0.1)";
+                label.style.border = "1px solid #f43f5e";
+                label.style.borderRadius = "8px";
+                label.style.padding = "8px";
+            }
+        });
+        
+        const expl = document.getElementById("qbank-explanation-container");
+        if (expl) expl.style.display = "block";
+        
+        const submitBtn = document.getElementById("qbank-submit-btn");
+        if (submitBtn) submitBtn.style.display = "none";
+        
+        const resultHeader = document.getElementById("qbank-result-header");
+        if (resultHeader) {
+            if (isCorrect) {
+                resultHeader.innerHTML = '<span style="color:#22c55e;"><i data-lucide="check-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Correct</span>';
+            } else if (isPartial) {
+                resultHeader.innerHTML = '<span style="color:#eab308;"><i data-lucide="check-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Partially correct</span>';
+            } else {
+                resultHeader.innerHTML = '<span style="color:#f43f5e;"><i data-lucide="x-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Incorrect</span>';
+            }
            if (window.lucide) window.lucide.createIcons();
        }
        
