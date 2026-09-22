@@ -46,9 +46,10 @@
 
   document.addEventListener("click", bump("click"), true);
   document.addEventListener("keydown", bump("typing"), true);
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) window.trackActivity("focus");
-  });
+  // NOTE: no visibilitychange/"focus" ping — tab switches aren't real
+  // activity and each one cost a Firestore write + a POST /api/activity
+  // log line. Clicks, typing, signin and the active keep-alive below
+  // already keep lastActiveIso fresh.
 
   // First ping as soon as a user is signed in.
   function watchAuth() {

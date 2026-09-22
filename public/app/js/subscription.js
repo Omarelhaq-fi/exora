@@ -24,9 +24,15 @@
     try {
       const user = window.firebase && firebase.auth && firebase.auth().currentUser;
       if (user) {
-        const snap = await firebase.firestore().collection('users_index').doc(user.uid).get();
-        if (snap.exists) {
-          const data = snap.data();
+        let data = null, exists = false;
+        if (window.getUsersIndexDoc) {
+          const rec = await window.getUsersIndexDoc(user.uid);
+          exists = rec.exists; data = rec.data;
+        } else {
+          const snap = await firebase.firestore().collection('users_index').doc(user.uid).get();
+          exists = snap.exists; data = exists ? snap.data() : null;
+        }
+        if (exists) {
           if (data && data.plan) plan = data.plan;
           else if (data && data.data) {
              try { const p = JSON.parse(data.data); if (p.plan) plan = p.plan; } catch(e) {}

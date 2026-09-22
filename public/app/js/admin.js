@@ -5,6 +5,7 @@
 (function () {
   let isAdminCache = false;
   let whoamiChecked = false;
+  let whoamiPromise = null; // in-flight dedupe: concurrent boot callers share one request
 
   function authToken() {
     const u = window.firebase && firebase.auth && firebase.auth().currentUser;
@@ -26,20 +27,26 @@
   }
   window.checkAdmin = async function(force) {
     if (whoamiChecked && !force) return isAdminCache;
+    if (!force && whoamiPromise) return whoamiPromise;
     // NOTE: do NOT trust sessionStorage here — a previous server-side bypass
     // poisoned cached '1' values for non-admins. Always verify with the server.
     // Clear any legacy cached value so stale admin flags disappear on next load.
     try { sessionStorage.removeItem('exora_is_admin'); } catch (_) {}
-    try {
-      const res = await api("/api/admin?action=whoami", { method: "GET" });
-      isAdminCache = !!res.admin;
-      whoamiChecked = true;
-      window.isAdminCache = isAdminCache;
-      window.isQBankAdmin = isAdminCache;
-      return isAdminCache;
-    } catch (e) {
-      return false;
-    }
+    whoamiPromise = (async () => {
+      try {
+        const res = await api("/api/admin?action=whoami", { method: "GET" });
+        isAdminCache = !!res.admin;
+        whoamiChecked = true;
+        window.isAdminCache = isAdminCache;
+        window.isQBankAdmin = isAdminCache;
+        return isAdminCache;
+      } catch (e) {
+        return false;
+      } finally {
+        whoamiPromise = null;
+      }
+    })();
+    return whoamiPromise;
   };
 
   function escapeHtml(s) {
@@ -1357,7 +1364,7 @@
     }
     firebase.auth().onAuthStateChanged(function (user) {
       if (user) {
-        whoamiChecked = false; // re-verify on account switch — never reuse previous account's result
+        whoamiChecked = false; whoamiPromise = null; // re-verify on account switch — never reuse previous account's result
         window.mirrorUserToIndex(user);
         window.showAdminButton();
       } else {

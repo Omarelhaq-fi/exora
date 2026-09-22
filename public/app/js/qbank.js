@@ -48,9 +48,26 @@
   };
 
   // --- IndexedDB Caching ---
+  // Two stores (DB v2):
+  // - `qbanks`: versioned question payloads, keyed by bank id
+  //   ({ id, updatedAt, questions }). Immutable per `updatedAt`, so entries
+  //   are kept FOREVER and only replaced when the version stamp changes.
+  //   Survives Vercel cold starts / page reloads: repeat visits download
+  //   0 questions and fetch only the tiny progress blob.
+  // - `kv`: forever-cache for tiny, rarely-changing values (qbank list,
+  //   peer threshold, study concepts). Stale-while-revalidate: serve
+  //   instantly from IDB, refresh in background. NEVER stored here:
+  //   per-question peer stats (volatile) and user progress (private).
   const DB_NAME = "OmnoteQBankCache";
   const STORE_NAME = "qbanks";
-  const DB_VERSION = 1;
+  const KV_STORE = "kv";
+  const DB_VERSION = 2;
+
+  const KV_KEYS = {
+    QBANK_LIST: "qbank_list:v1",
+    PEER_THRESHOLD: "peer_threshold:v1",
+    studyConcept: (bankId, qid, lang) => `study_concept:v1:${bankId}:${qid}:${lang || "auto"}`,
+  };
 
   function openQBankDB() {
     return new Promise((resolve, reject) => {
@@ -60,10 +77,35 @@
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: "id" });
         }
+        if (!db.objectStoreNames.contains(KV_STORE)) {
+          db.createObjectStore(KV_STORE, { keyPath: "key" });
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+  }
+
+  function idbKvGet(key) {
+    return openQBankDB().then((db) => new Promise((resolve) => {
+      try {
+        const tx = db.transaction(KV_STORE, "readonly");
+        const req = tx.objectStore(KV_STORE).get(key);
+        req.onsuccess = () => resolve(req.result ? req.result.value : null);
+        req.onerror = () => resolve(null);
+      } catch (_) { resolve(null); }
+    })).catch(() => null);
+  }
+
+  function idbKvSet(key, value) {
+    return openQBankDB().then((db) => new Promise((resolve) => {
+      try {
+        const tx = db.transaction(KV_STORE, "readwrite");
+        const req = tx.objectStore(KV_STORE).put({ key, value, savedAt: Date.now() });
+        req.onsuccess = () => resolve();
+        req.onerror = () => resolve();
+      } catch (_) { resolve(); }
+    })).catch(() => {});
   }
 
   async function getCachedQBank(id) {
@@ -251,18 +293,36 @@
     if (!preloadPromise) {
       preloadPromise = (async () => {
         try {
+          // Forever-cache hydrate: survive reloads / Vercel cold starts.
+          // IDB holds { banks, maxUpdatedAt } with no TTL; the ?v=
+          // revalidation below costs 0 Firestore reads when unchanged.
+          if (!cachedCategories) {
+            try {
+              const saved = await idbKvGet(KV_KEYS.QBANK_LIST);
+              if (saved && Array.isArray(saved.banks) && saved.banks.length) {
+                cachedCategories = saved.banks;
+                if (saved.maxUpdatedAt) window.__qbanksMaxUpdatedAt = saved.maxUpdatedAt;
+              }
+            } catch (_) {}
+          }
           // Version-aware: send our known maxUpdatedAt; server answers
           // `{ unchanged: true }` with 0 Firestore reads when nothing was
           // published since. `window.__qbanksMaxUpdatedAt` persists for the
-          // page session; cachedCategories is never refetched otherwise.
+          // page session AND in IDB forever; cachedCategories is never refetched otherwise.
           // Only send v when we actually hold the matching list — otherwise
           // an `unchanged` answer would leave us with nothing to render.
           const params = {};
           if (window.__qbanksMaxUpdatedAt && cachedCategories) params.v = String(window.__qbanksMaxUpdatedAt);
           const res = await apiGet("list_categories", params);
-          if (res.unchanged) return; // keep existing cachedCategories
-          if (Array.isArray(res.qbanks)) cachedCategories = res.qbanks;
-          if (res.maxUpdatedAt) window.__qbanksMaxUpdatedAt = res.maxUpdatedAt;
+          if (res.unchanged) return; // keep existing cachedCategories (memory + IDB)
+          if (Array.isArray(res.qbanks)) {
+            cachedCategories = res.qbanks;
+            if (res.maxUpdatedAt) window.__qbanksMaxUpdatedAt = res.maxUpdatedAt;
+            // Persist forever (fire-and-forget: never blocks render).
+            try { idbKvSet(KV_KEYS.QBANK_LIST, { banks: cachedCategories, maxUpdatedAt: window.__qbanksMaxUpdatedAt || 0 }); } catch (_) {}
+          } else if (res.maxUpdatedAt) {
+            window.__qbanksMaxUpdatedAt = res.maxUpdatedAt;
+          }
         } catch (e) {
           console.error("Preload QBank failed", e);
           preloadPromise = null; // allow retry
@@ -310,29 +370,43 @@
       try {
         if (!window.db) window.db = {};
         const res = await apiGet("bootstrap_access");
-        window.db.access = {
-          country: res.profileCountry || "",
-          mainIds: Array.isArray(res.mainIds) ? res.mainIds : [],
-          prepIds: Array.isArray(res.prepIds) ? res.prepIds : [],
-          grants: Array.isArray(res.grants) ? res.grants : [],
-          legacy: !!res.legacy,
-        };
-        const a = window.db.access;
-        const isAllowed = (id) => a.legacy || a.grants.includes(id) || a.mainIds.includes(id);
-        if (window.db.selectedQBankId && !isAllowed(window.db.selectedQBankId)) {
-          window.db.selectedQBankId = null;
-        }
-        if (!window.db.selectedQBankId && a.mainIds.length > 0) {
-          window.db.selectedQBankId = a.mainIds[0];
-        }
-        if (typeof saveDb === "function") saveDb();
-        return a;
+        return window.applyAccessBundle(res);
       } catch (e) {
         console.warn("bootstrap_access failed", e);
         return null;
       }
     })();
     return window.__bootstrapPromise;
+  };
+
+  // Apply an access bundle (from bootstrap_access OR piggybacked on
+  // get_questions?includeAccess=1 — identical shape by server contract).
+  // Single source of truth for selection correction + memo seeding, so the
+  // batched path can never diverge from the standalone call.
+  window.applyAccessBundle = function(bundle) {
+    if (!bundle) return null;
+    if (!window.db) window.db = {};
+    window.db.access = {
+      country: bundle.profileCountry || "",
+      mainIds: Array.isArray(bundle.mainIds) ? bundle.mainIds : [],
+      prepIds: Array.isArray(bundle.prepIds) ? bundle.prepIds : [],
+      grants: Array.isArray(bundle.grants) ? bundle.grants : [],
+      legacy: !!bundle.legacy,
+    };
+    const a = window.db.access;
+    const isAllowed = (id) => a.legacy || a.grants.includes(id) || a.mainIds.includes(id);
+    if (window.db.selectedQBankId && !isAllowed(window.db.selectedQBankId)) {
+      window.db.selectedQBankId = null;
+    }
+    if (!window.db.selectedQBankId && a.mainIds.length > 0) {
+      window.db.selectedQBankId = a.mainIds[0];
+    }
+    if (typeof saveDb === "function") saveDb();
+    // Seed the bootstrap memo so later bootstrapAccess() calls within
+    // 5 min cost 0 HTTP.
+    window.__bootstrapPromise = Promise.resolve(a);
+    window.__bootstrapCacheTime = Date.now();
+    return a;
   };
 
   window.qbankCanOpen = function(bankId) {
@@ -475,12 +549,15 @@
       // Revalidate against the publish timestamp: 0 Firestore reads when
       // nothing was published since, fresh list otherwise (no reload needed
       // to see newly published banks).
-      try {
-        const params = {};
-        if (window.__qbanksMaxUpdatedAt && cachedCategories) params.v = String(window.__qbanksMaxUpdatedAt);
-        const re = await apiGet("list_categories", params);
-        if (!re.unchanged && Array.isArray(re.qbanks)) cachedCategories = re.qbanks;
-        if (re.maxUpdatedAt) window.__qbanksMaxUpdatedAt = re.maxUpdatedAt;
+        try {
+          const params = {};
+          if (window.__qbanksMaxUpdatedAt && cachedCategories) params.v = String(window.__qbanksMaxUpdatedAt);
+          const re = await apiGet("list_categories", params);
+          if (!re.unchanged && Array.isArray(re.qbanks)) {
+            cachedCategories = re.qbanks;
+            try { idbKvSet(KV_KEYS.QBANK_LIST, { banks: cachedCategories, maxUpdatedAt: window.__qbanksMaxUpdatedAt || re.maxUpdatedAt || 0 }); } catch (_) {}
+          }
+          if (re.maxUpdatedAt) window.__qbanksMaxUpdatedAt = re.maxUpdatedAt;
       } catch (e) { /* keep session cache on revalidation failure */ }
       if (navStale(myNav)) return;
       qbanks = cachedCategories || [];
@@ -620,13 +697,18 @@
       }
       const activeQBankId = window.db.selectedQBankId;
 
-      await window.bootstrapAccess(); // always fresh — never trust cached access
-      if (navStale(myNav)) return;
-      // Bootstrap may correct the selection (revoked bank -> first allowed).
-      // Restart once with the corrected id instead of rendering a stale mix.
-      if (!window.db || window.db.selectedQBankId !== activeQBankId) {
-        return window.openQBank();
+      if (cachedQBanks[activeQBankId]) {
+        await window.bootstrapAccess(); // memoized (5 min) — usually 0 HTTP
+        if (navStale(myNav)) return;
+        // Bootstrap may correct the selection (revoked bank -> first allowed).
+        // Restart once with the corrected id instead of rendering a stale mix.
+        if (!window.db || window.db.selectedQBankId !== activeQBankId) {
+          return window.openQBank();
+        }
       }
+      // Else: standalone bootstrap SKIPPED — the progress fetch below carries
+      // ?includeAccess=1 and applies the same bundle (fresher than memo,
+      // 0 extra HTTP). The correction restart happens after it lands.
       // Commit the active bank NOW so "Browse Specialties" can never fall
       // back to the previous bank, even if question loading below fails.
       currentQBankId = activeQBankId;
@@ -644,26 +726,29 @@
       const activeQBankName = activeQBankMeta ? activeQBankMeta.name : "Your QBank";
       const isActiveExamPrep = activeQBankMeta && activeQBankMeta.kind === "exam_prep";
       
-      if (!cachedQBanks[activeQBankId]) {
-         area.innerHTML = `
-          <div class="flex flex-col justify-center items-center h-64 gap-4">
-            <div class="press-wrapper" style="margin: 20px auto 0; display: flex; justify-content: center; align-items: center;">
-                <div class="press">
-                  <div class="sheet"></div><div class="roll"></div><div class="sheet"></div><div class="roll"></div>
-                  <div class="sheet"></div><div class="roll"></div><div class="sheet"></div><div class="sheet"></div>
-                  <div class="sheet"></div><div class="sheet"></div><div class="sheet"></div><div class="roll"></div>
-                </div>
-            </div>
-            <div class="text-on-surface-variant text-sm">Loading details...</div>
-          </div>`;
-         try {
-             const catUpdated = activeQBankMeta.updatedAt || 0;
-             const idbData = await getCachedQBank(activeQBankId);
-             if (idbData && idbData.updatedAt === catUpdated && idbData.questions && idbData.questions.length > 0) {
-                 // Questions are fresh in IndexedDB — only fetch progress (tiny, private)
-                 const res = await apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true });
-                 cachedQBanks[activeQBankId] = { questions: idbData.questions, progress: applyLocalQueueProgress(activeQBankId, res.progress || {}) };
-             } else {
+       if (!cachedQBanks[activeQBankId]) {
+          area.innerHTML = `
+           <div class="flex flex-col justify-center items-center h-64 gap-4">
+             <div class="press-wrapper" style="margin: 20px auto 0; display: flex; justify-content: center; align-items: center;">
+                 <div class="press">
+                   <div class="sheet"></div><div class="roll"></div><div class="sheet"></div><div class="roll"></div>
+                   <div class="sheet"></div><div class="roll"></div><div class="sheet"></div><div class="sheet"></div>
+                   <div class="sheet"></div><div class="sheet"></div><div class="sheet"></div><div class="roll"></div>
+                 </div>
+             </div>
+             <div class="text-on-surface-variant text-sm">Loading details...</div>
+           </div>`;
+          let batchedAccess = null; // ?includeAccess=1 piggyback (replaces standalone bootstrap)
+          try {
+              const catUpdated = activeQBankMeta.updatedAt || 0;
+              const idbData = await getCachedQBank(activeQBankId);
+              if (idbData && idbData.updatedAt === catUpdated && idbData.questions && idbData.questions.length > 0) {
+                  // Questions are fresh in IndexedDB — only fetch progress (tiny, private)
+                  // + access bundle (batched: 0 extra HTTP vs standalone bootstrap).
+                  const res = await apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true, includeAccess: true });
+                  cachedQBanks[activeQBankId] = { questions: idbData.questions, progress: applyLocalQueueProgress(activeQBankId, res.progress || {}) };
+                  if (res.access) batchedAccess = res.access;
+              } else {
                  // Questions outdated or missing — download from CDN static endpoint
                  // (no Auth header = Vercel Edge CDN will cache this globally)
                  const [staticRes, progressRes] = await Promise.all([
@@ -680,18 +765,36 @@
                      }
                      return questions;
                    })(),
-                   apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true })
-                 ]);
-                 const questions = staticRes;
-                 const progress = progressRes.progress || {};
-                 cachedQBanks[activeQBankId] = { questions, progress: applyLocalQueueProgress(activeQBankId, progress) };
-                 // Persist to IndexedDB so next visit is instant
-                 setCachedQBank(activeQBankId, { updatedAt: catUpdated, questions });
+                    apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true, includeAccess: true })
+                  ]);
+                  const questions = staticRes;
+                  const progress = progressRes.progress || {};
+                  if (progressRes.access) batchedAccess = progressRes.access;
+                  cachedQBanks[activeQBankId] = { questions, progress: applyLocalQueueProgress(activeQBankId, progress) };
+                  // Persist to IndexedDB so next visit is instant
+                  setCachedQBank(activeQBankId, { updatedAt: catUpdated, questions });
+              }
+           } catch (e) {
+               const msg = String((e && e.message) || e);
+               if (/forbidden|403/i.test(msg)) {
+                 // Stale selection (grant revoked) — standalone bootstrap was
+                 // skipped, so correct the selection now and restart once.
+                 try { await window.bootstrapAccess(true); } catch (_) {}
+                 if (navStale(myNav)) return;
+                 return window.openQBank();
+               }
+               console.error("Failed to load bank data", e);
+           }
+           // Batched access landed with progress: same correction restart the
+           // standalone bootstrap used to do, minus one HTTP roundtrip.
+           if (batchedAccess && window.applyAccessBundle) {
+             window.applyAccessBundle(batchedAccess);
+             if (navStale(myNav)) return;
+             if (!window.db || window.db.selectedQBankId !== activeQBankId) {
+               return window.openQBank();
              }
-          } catch (e) {
-              console.error("Failed to load bank data", e);
-          }
-       }
+           }
+        }
        if (navStale(myNav)) return;
 
       let totalQuestions = 0;
@@ -2583,16 +2686,17 @@
       }).join('');
     }
     
-    // Fetch peer stats for this question (async, then update percentages)
-    if (q.id && window.loadPeerStats && !window._peerStatsLoading) {
-      window._peerStatsLoading = true;
-      window.loadPeerStats(q.id).then(() => {
-        window._peerStatsLoading = false;
-        // Update percentages without re-rendering the whole question
-        window._updatePeerPercentages(q.id);
-      }).finally(() => {
-        window._peerStatsLoading = false;
-      });
+    // Fetch peer stats for this question (cached: 0 reads on revisit).
+    // loadPeerStats() dedupes in-flight requests and serves fresh cache,
+    // so rapid Next/Prev navigation never fires duplicate Firestore gets.
+    if (q.id && window.loadPeerStats) {
+      window.loadPeerStats(q.id).then((stats) => {
+        // Only paint if the user hasn't navigated away mid-fetch.
+        if (!currentQuestions[currentIndex] || currentQuestions[currentIndex].id !== q.id) return;
+        if (stats && window.qbankUpdatePeerPercentages) {
+          window.qbankUpdatePeerPercentages(q.id, stats);
+        }
+      }).catch(() => {});
     }
 
     let submitHtml = '';
@@ -2891,15 +2995,18 @@
       });
     }
 
-    // Log answer to global peer stats
+    // Log answer to global peer stats (write path also patches the cache,
+    // so the UI refresh below needs no extra Firestore read).
     if (selectedIndices.length > 0) {
       _logPeerAnswer(q.id, selectedIndices[0]);
-      // Update percentages without re-rendering
-      setTimeout(async () => {
-        const stats = await window.loadPeerStats(q.id);
-        if (stats) {
-          await window.qbankUpdatePeerPercentages(q.id, stats);
-        }
+      // Update percentages without re-rendering (cached stats only: 0 reads)
+      setTimeout(() => {
+        try {
+          const stats = window.qbankPeerStats && window.qbankPeerStats[q.id];
+          if (stats && window.qbankUpdatePeerPercentages) {
+            window.qbankUpdatePeerPercentages(q.id, stats);
+          }
+        } catch (_) {}
       }, 500);
     }
   };
@@ -2953,21 +3060,34 @@
     });
   };
 
-  // Log answer to global peer statistics (unique users only)
+  // Log answer to global peer statistics (unique users only).
+  // Deduped per session + cache-checked: re-renders and revisits never
+  // trigger another Firestore get().
   function _logPeerAnswer(questionId, selectedIndex) {
     try {
+      if (!window.__peerLogged) window.__peerLogged = {};
+      if (window.__peerLogged[questionId]) return;
       const fsdb = firebase.firestore();
       const statsRef = fsdb.collection('questionStats').doc(questionId);
-      const currentUser = firebase.auth().currentUser;
-      const userId = currentUser ? currentUser.uid : 'anonymous_' + Date.now();
-      
+      const currentUser = firebase.auth && firebase.auth().currentUser;
+      const userId = currentUser ? currentUser.uid : null;
+      // Skip the read entirely when our fresh cache already proves this
+      // user was counted (e.g. revisit after answering elsewhere).
+      if (userId && window.qbankPeerStats && window.qbankPeerStats[questionId] &&
+          window.qbankPeerStats[questionId].users && window.qbankPeerStats[questionId].users[userId]) {
+        window.__peerLogged[questionId] = true;
+        return;
+      }
+      window.__peerLogged[questionId] = true;
+      const anonId = userId || ('anonymous_' + Date.now());
+       
       statsRef.get().then(doc => {
         if (doc.exists) {
           const data = doc.data();
           const users = data.users || {};
           
           // Check if user already answered
-          if (users[userId]) {
+          if (users[anonId]) {
             // User already answered - don't count again
             return;
           }
@@ -2975,7 +3095,16 @@
           // New user - update counts
           const userCounts = data.userCounts || {};
           userCounts[selectedIndex] = (userCounts[selectedIndex] || 0) + 1;
-          users[userId] = true;
+          users[anonId] = true;
+
+          // Optimistically patch the in-memory cache so the post-answer UI
+          // refresh below needs ZERO extra Firestore reads.
+          try {
+            if (!window.qbankPeerStats) window.qbankPeerStats = {};
+            if (!window.__peerStatsTime) window.__peerStatsTime = {};
+            window.qbankPeerStats[questionId] = { ...(data || {}), users, userCounts };
+            window.__peerStatsTime[questionId] = Date.now();
+          } catch (_) {}
           
           statsRef.update({
             userCounts: userCounts,
@@ -2988,7 +3117,14 @@
           const userCounts = {};
           userCounts[selectedIndex] = 1;
           const users = {};
-          users[userId] = true;
+          users[anonId] = true;
+
+          try {
+            if (!window.qbankPeerStats) window.qbankPeerStats = {};
+            if (!window.__peerStatsTime) window.__peerStatsTime = {};
+            window.qbankPeerStats[questionId] = { users, userCounts, total: 1 };
+            window.__peerStatsTime[questionId] = Date.now();
+          } catch (_) {}
           
           statsRef.set({
             userCounts: userCounts,
@@ -3007,8 +3143,11 @@
   }
 
   // Load peer stats threshold from server (public endpoint).
-  // Cached 5 min client-side AND server-side: repeat dashboard opens and
-  // question renders cost zero extra fetches / zero Firestore reads.
+  // Forever-cached in IDB (admin setting, changes rarely) + 5-min memory:
+  // repeat dashboard opens and question renders cost zero blocking fetches
+  // / zero Firestore reads. IDB seed renders instantly; background
+  // revalidation (at most once per hour) keeps it fresh without ever
+  // blocking the UI.
   window._loadPeerThreshold = function() {
     try {
       const now = Date.now();
@@ -3017,11 +3156,51 @@
         return Promise.resolve(window.qbankPeerThreshold);
       }
       if (window.__peerThresholdPromise) return window.__peerThresholdPromise;
+      const persistThreshold = (n) => {
+        window.qbankPeerThreshold = n;
+        window.__peerThresholdTime = Date.now();
+        try {
+          idbKvSet(KV_KEYS.PEER_THRESHOLD, { threshold: n, at: Date.now() });
+          localStorage.setItem("omnote_peer_threshold", String(n));
+          localStorage.setItem("omnote_peer_threshold_at", String(Date.now()));
+        } catch (_) {}
+      };
+      const backgroundRefresh = () => {
+        fetch('/api/qbank?action=get_peer_stats_threshold')
+          .then(res => res.json())
+          .then(data => persistThreshold(data.threshold || 50))
+          .catch(() => {});
+      };
+      // Fast path: forever-cache seeds instantly (sync localStorage with
+      // age stamp; async IDB as backup). Background refresh at most once
+      // per hour — the setting changes only via explicit admin save.
+      if (!window.qbankPeerThreshold) {
+        let seedAt = 0;
+        try {
+          const ls = parseInt(localStorage.getItem("omnote_peer_threshold") || "", 10);
+          seedAt = parseInt(localStorage.getItem("omnote_peer_threshold_at") || "0", 10) || 0;
+          if (ls >= 1 && !window.qbankPeerThreshold) {
+            window.qbankPeerThreshold = ls;
+            window.__peerThresholdTime = Date.now();
+          }
+        } catch (_) {}
+        idbKvGet(KV_KEYS.PEER_THRESHOLD).then((saved) => {
+          const t = saved && (saved.threshold || saved);
+          const n = typeof t === "number" ? t : parseInt(t, 10);
+          if (n >= 1 && !window.qbankPeerThreshold) {
+            window.qbankPeerThreshold = n;
+            window.__peerThresholdTime = Date.now();
+          }
+        }).catch(() => {});
+        if (window.qbankPeerThreshold) {
+          if (!seedAt || now - seedAt > 60 * 60_000) backgroundRefresh();
+          return Promise.resolve(window.qbankPeerThreshold);
+        }
+      }
       window.__peerThresholdPromise = fetch('/api/qbank?action=get_peer_stats_threshold')
         .then(res => res.json())
         .then(data => {
-          window.qbankPeerThreshold = data.threshold || 50;
-          window.__peerThresholdTime = Date.now();
+          persistThreshold(data.threshold || 50);
           console.log('[peer-stats] threshold loaded:', window.qbankPeerThreshold);
           return window.qbankPeerThreshold;
         })
@@ -3039,20 +3218,34 @@
     }
   }
 
-  // Load peer stats for a specific question
-  window.loadPeerStats = function(questionId) {
-    return new Promise((resolve) => {
-      try {
-        const fsdb = firebase.firestore();
-        fsdb.collection('questionStats').doc(questionId).get().then(doc => {
+  // Load peer stats for a specific question.
+  // Cached 2 min per question + in-flight dedupe: revisits, re-renders and
+  // the post-answer refresh below cost ZERO extra Firestore reads.
+  window.loadPeerStats = function(questionId, opts) {
+    const force = !!(opts && opts.force);
+    const now = Date.now();
+    const TTL = 2 * 60_000;
+    try {
+      if (!force && window.qbankPeerStats && window.qbankPeerStats[questionId] &&
+          window.__peerStatsTime && (now - (window.__peerStatsTime[questionId] || 0)) < TTL) {
+        return Promise.resolve(window.qbankPeerStats[questionId]);
+      }
+      if (!window.__peerStatsInflight) window.__peerStatsInflight = {};
+      if (!force && window.__peerStatsInflight[questionId]) return window.__peerStatsInflight[questionId];
+      const p = new Promise((resolve) => {
+        try {
+          const fsdb = firebase.firestore();
+          fsdb.collection('questionStats').doc(questionId).get().then(doc => {
           if (doc.exists) {
             if (!window.qbankPeerStats) window.qbankPeerStats = {};
+            if (!window.__peerStatsTime) window.__peerStatsTime = {};
             const data = doc.data();
             // Migrate old format to new format if needed
             if (!data.userCounts && data.counts) {
               data.userCounts = data.counts;
             }
             window.qbankPeerStats[questionId] = data;
+            window.__peerStatsTime[questionId] = Date.now();
             resolve(data);
           } else {
             resolve(null);
@@ -3065,7 +3258,14 @@
         console.warn('Error loading peer stats:', e);
         resolve(null);
       }
-    });
+      });
+      p.finally(() => { if (window.__peerStatsInflight) delete window.__peerStatsInflight[questionId]; });
+      window.__peerStatsInflight[questionId] = p;
+      return p;
+    } catch (e) {
+      console.warn('Error loading peer stats:', e);
+      return Promise.resolve(null);
+    }
   }
 
   // Log answer to global peer statistics
@@ -4023,6 +4223,20 @@
       return;
     }
 
+    // Forever-cache (IDB): study concepts are immutable per question+lang.
+    // Survives reloads / Vercel cold starts: 0 Firestore reads + 0 AI cost
+    // on revisit. Keyed by bank+question+lang so language switches stay correct.
+    try {
+      const idbHit = await idbKvGet(KV_KEYS.studyConcept(currentQBankId, questionId, conceptLang));
+      if (idbHit && idbHit.html && window.qbankConceptUsable(idbHit.lang, conceptLang)) {
+        q.studyConcept = idbHit.html;
+        q.studyConceptLang = idbHit.lang || null;
+        contentDiv.innerHTML = (window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(q.studyConcept)) : q.studyConcept;
+        if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+        return;
+      }
+    } catch (_) {}
+
     contentDiv.innerHTML = `
       <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:60px 20px; gap:16px;">
         <div style="width:40px; height:40px; border:3px solid rgba(128,128,128,0.2); border-top-color:var(--accent-cyan); border-radius:50%; animation:qbspin 1s linear infinite;"></div>
@@ -4041,6 +4255,7 @@
         if (getData.studyConcept && window.qbankConceptUsable(getData.studyConceptLang, conceptLang)) {
           q.studyConcept = getData.studyConcept;
           q.studyConceptLang = getData.studyConceptLang || null;
+          try { idbKvSet(KV_KEYS.studyConcept(currentQBankId, questionId, conceptLang), { html: q.studyConcept, lang: q.studyConceptLang }); } catch (_) {}
           contentDiv.innerHTML = (window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(q.studyConcept)) : q.studyConcept;
           if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
           return;
@@ -4080,6 +4295,7 @@
       
       q.studyConcept = parsedContent;
       q.studyConceptLang = conceptLang;
+      try { idbKvSet(KV_KEYS.studyConcept(currentQBankId, questionId, conceptLang), { html: parsedContent, lang: conceptLang }); } catch (_) {}
       contentDiv.innerHTML = (window.marked && window.DOMPurify) ? window.DOMPurify.sanitize(window.marked.parse(parsedContent)) : parsedContent;
 
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
@@ -4638,11 +4854,40 @@
           <p style="margin:0 0 30px 0; font-size:1rem; color:var(--text-muted);">Explore hand-picked study materials for your question banks.</p>
       `;
       
-      // Ensure we have the latest qbanks data
+      // Ensure we have the latest qbanks data (reuse session cache when fresh:
+      // 0 fetches / 0 Firestore reads on repeat visits; version-aware
+      // revalidation otherwise. Backed by IDB forever-cache so reloads
+      // never pay a full list fetch).
       try {
-          const res = await apiGet("list_categories");
-          qbanks = res.qbanks || [];
-          cachedCategories = res.qbanks || [];
+          let useCache = !!(cachedCategories && Array.isArray(cachedCategories) && cachedCategories.length);
+          if (!useCache) {
+              try {
+                  const saved = await idbKvGet(KV_KEYS.QBANK_LIST);
+                  if (saved && Array.isArray(saved.banks) && saved.banks.length) {
+                      cachedCategories = saved.banks;
+                      if (saved.maxUpdatedAt) window.__qbanksMaxUpdatedAt = saved.maxUpdatedAt;
+                      useCache = true;
+                  }
+              } catch (_) {}
+          }
+          if (useCache && window.__qbanksMaxUpdatedAt) {
+              try {
+                  const re = await apiGet("list_categories", { v: String(window.__qbanksMaxUpdatedAt) });
+                  if (!re.unchanged && Array.isArray(re.qbanks)) {
+                      cachedCategories = re.qbanks;
+                      try { idbKvSet(KV_KEYS.QBANK_LIST, { banks: cachedCategories, maxUpdatedAt: re.maxUpdatedAt || window.__qbanksMaxUpdatedAt || 0 }); } catch (_) {}
+                  }
+                  if (re.maxUpdatedAt) window.__qbanksMaxUpdatedAt = re.maxUpdatedAt;
+              } catch (_) { /* keep session cache on revalidation failure */ }
+          } else {
+              const res = await apiGet("list_categories");
+              if (Array.isArray(res.qbanks)) {
+                  cachedCategories = res.qbanks;
+                  if (res.maxUpdatedAt) window.__qbanksMaxUpdatedAt = res.maxUpdatedAt;
+                  try { idbKvSet(KV_KEYS.QBANK_LIST, { banks: cachedCategories, maxUpdatedAt: window.__qbanksMaxUpdatedAt || 0 }); } catch (_) {}
+              }
+          }
+          qbanks = cachedCategories || [];
       } catch(e) {
           console.error("Failed to refresh resources:", e);
       }
@@ -4966,16 +5211,24 @@
 
 })();
 
-// Admin Diagnostic System
+// Admin Diagnostic System — Firebase-real counts only.
+// Every entry is either TRACKED (server sent x-firestore-reads/writes
+// headers, or a direct SDK op logged at its call site) or UNTRACKED
+// (backend route without instrumentation — flagged, never guessed).
 (function() {
-  let diagnosticData = { reads: 0, writes: 0, logs: [] };
+  let diagnosticData = { reads: 0, writes: 0, untracked: 0, logs: [] };
   
-  window.logAdminDiagnostic = function(action, reads, writes) {
-    diagnosticData.reads += reads;
-    diagnosticData.writes += writes;
+  window.logAdminDiagnostic = function(action, reads, writes, tracked) {
+    const isTracked = tracked !== false; // default true for direct-SDK call sites
+    if (isTracked) {
+      diagnosticData.reads += reads;
+      diagnosticData.writes += writes;
+    } else {
+      diagnosticData.untracked += 1;
+    }
     diagnosticData.logs.unshift({
       time: new Date().toLocaleTimeString(),
-      action, reads, writes
+      action, reads, writes, tracked: isTracked
     });
     if (diagnosticData.logs.length > 50) diagnosticData.logs.pop();
     
@@ -5022,17 +5275,13 @@
     
     if (isApi) {
         try {
-            let reads = parseInt(res.headers.get('x-firestore-reads') || '0', 10);
-            let writes = parseInt(res.headers.get('x-firestore-writes') || '0', 10);
-            
-            // Fallback heuristics if backend headers are missing
-            if (!res.headers.has('x-firestore-reads')) {
-                const m = logName.split(' ')[0];
-                reads = m === 'GET' ? 1 : 0;
-                writes = m !== 'GET' ? 1 : 0;
-            }
-            
-            window.logAdminDiagnostic(logName, reads, writes);
+            // Firebase-real only: no guessing. Routes without the
+            // x-firestore-* headers are flagged UNTRACKED so missing
+            // instrumentation is visible instead of silently wrong.
+            const hasHeaders = res.headers.has('x-firestore-reads');
+            const reads = parseInt(res.headers.get('x-firestore-reads') || '0', 10);
+            const writes = parseInt(res.headers.get('x-firestore-writes') || '0', 10);
+            window.logAdminDiagnostic(logName, reads, writes, hasHeaders);
         } catch(e) {}
     }
     
@@ -5066,17 +5315,22 @@
     }
     
     const body = document.getElementById('adw-body');
-    let html = `<div style="padding:8px 12px;border-bottom:1px solid var(--outline, #444);display:flex;gap:12px;">
+    let html = `<div style="padding:8px 12px;border-bottom:1px solid var(--outline, #444);display:flex;gap:12px;align-items:center;" title="Real Firestore counts only — untracked calls carry no headers and are excluded">
       <div style="color:#22c55e;">Reads: <b>${diagnosticData.reads}</b></div>
       <div style="color:#eab308;">Writes: <b>${diagnosticData.writes}</b></div>
+      ${diagnosticData.untracked > 0 ? `<div style="color:#f59e0b;" title="${diagnosticData.untracked} API call(s) without Firestore headers — backend route not instrumented">⚠ untracked: <b>${diagnosticData.untracked}</b></div>` : ""}
     </div>`;
     
     html += `<div style="max-height:200px;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:6px;">`;
     diagnosticData.logs.forEach(l => {
       let cost = [];
-      if (l.reads > 0) cost.push(`<span style="color:#22c55e;white-space:nowrap;">${l.reads}r</span>`);
-      if (l.writes > 0) cost.push(`<span style="color:#eab308;white-space:nowrap;">${l.writes}w</span>`);
-      if (cost.length === 0) cost.push(`<span style="color:var(--text-muted);white-space:nowrap;">0</span>`);
+      if (l.tracked === false) {
+        cost.push(`<span style="color:#f59e0b;white-space:nowrap;" title="No x-firestore-* headers — not counted">?</span>`);
+      } else {
+        if (l.reads > 0) cost.push(`<span style="color:#22c55e;white-space:nowrap;">${l.reads}r</span>`);
+        if (l.writes > 0) cost.push(`<span style="color:#eab308;white-space:nowrap;">${l.writes}w</span>`);
+        if (cost.length === 0) cost.push(`<span style="color:var(--text-muted);white-space:nowrap;">0</span>`);
+      }
       html += `<div style="display:flex;justify-content:space-between;opacity:0.9;border-bottom:1px solid var(--outline-variant, #333);padding-bottom:2px;">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${l.action}">[${l.time}] ${l.action}</span>
         <span>${cost.join(' ')}</span>
@@ -5096,5 +5350,152 @@
          renderAdminDiagnosticWidget();
      }
   }, 1000);
+
+  // ---- Direct Firestore SDK catch-all ----
+  // The fetch interceptor above only sees /api/* traffic. Anything using
+  // the browser SDK directly (syncDbToCloud users/users_index writes,
+  // boot-time users_index gets, pomodoro, notifications + party
+  // onSnapshot listeners, peer-stats gets) bypassed it completely — those
+  // were the "phantom" reads visible in the Firebase console but missing
+  // here. So we patch the compat SDK prototypes once: every doc get counts
+  // 1r (billed even on miss), every set/update/delete/add counts 1w,
+  // query gets count max(1, size), batches count their ops at commit, and
+  // onSnapshot listeners count the initial snapshot + subsequent deltas.
+  // Ref creation (collection()/doc()) and FieldValue sentinels are pure
+  // local — never logged.
+  function diagRefPath(ref, fallback) {
+    try {
+      if (ref && typeof ref.path === "string" && ref.path) return ref.path;
+      const inner = (ref && (ref._query || (ref._delegate && ref._delegate._query))) || null;
+      const segs = inner && inner.path;
+      if (segs && typeof segs.canonicalString === "function") return segs.canonicalString();
+      if (Array.isArray(segs)) return segs.join("/");
+    } catch (_) {}
+    return fallback || "query";
+  }
+  function diagIsQuerySnap(snap) {
+    try { return snap && typeof snap.size === "number"; } catch (_) { return false; }
+  }
+  function diagWrapObserverArgs(args, onSnap) {
+    const out = Array.prototype.slice.call(args);
+    const wrapNext = (next) => function (snap) { try { onSnap(snap); } catch (_) {} return next(snap); };
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i];
+      if (typeof a === "function" && i > 0 && typeof out[0] === "object") { out[i] = wrapNext(a); break; } // (options, next, ...)
+      if (typeof a === "function") { out[i] = wrapNext(a); break; } // (next, ...)
+      if (a && typeof a === "object" && typeof a.next === "function") { // observer object
+        try {
+          const clone = Object.create(Object.getPrototypeOf(a));
+          for (const k of Object.keys(a)) clone[k] = a[k];
+          const oNext = a.next.bind(a);
+          clone.next = function (snap) { try { onSnap(snap); } catch (_) {} return oNext(snap); };
+          out[i] = clone;
+        } catch (_) {}
+        break;
+      }
+    }
+    return out;
+  }
+  function patchFirestoreSDK() {
+    try {
+      if (!window.firebase || !window.firebase.firestore) return false;
+      const fs = window.firebase.firestore();
+      if (!fs) return false;
+      // Probe refs: creating them is pure local, zero network.
+      const probeDoc = fs.doc("__diag__/probe");
+      const probeCol = fs.collection("__diag__");
+      const probeBatch = fs.batch();
+      const DocProto = Object.getPrototypeOf(probeDoc);
+      const ColProto = Object.getPrototypeOf(probeCol);
+      const QueryProto = Object.getPrototypeOf(ColProto); // CollectionReference extends Query
+      const BatchProto = Object.getPrototypeOf(probeBatch);
+      if (!DocProto || !QueryProto || !BatchProto) return false;
+      if (DocProto.__diagPatched) return true;
+
+      const log = (action, r, w) => { try { window.logAdminDiagnostic(action, r, w, true); } catch (_) {} };
+
+      const origDocGet = DocProto.get;
+      if (origDocGet && !DocProto.__diagPatched) {
+        DocProto.get = function (...args) { log("sdk doc get " + diagRefPath(this, "doc"), 1, 0); return origDocGet.apply(this, args); };
+      }
+      [["set", 0, 1], ["update", 0, 1], ["delete", 0, 1]].forEach(([m, r, w]) => {
+        const orig = DocProto[m];
+        if (typeof orig === "function") {
+          DocProto[m] = function (...args) { log("sdk doc " + m + " " + diagRefPath(this, "doc"), r, w); return orig.apply(this, args); };
+        }
+      });
+      const origDocSnap = DocProto.onSnapshot;
+      if (typeof origDocSnap === "function") {
+        DocProto.onSnapshot = function (...args) {
+          const path = diagRefPath(this, "doc");
+          let first = true;
+          const wrapped = diagWrapObserverArgs(args, () => { if (first) { first = false; log("sdk live doc " + path, 1, 0); } else { log("sdk live doc update " + path, 1, 0); } });
+          return origDocSnap.apply(this, wrapped);
+        };
+      }
+
+      const origQueryGet = QueryProto.get;
+      if (typeof origQueryGet === "function" && !QueryProto.__diagQueryPatched) {
+        QueryProto.get = function (...args) {
+          const label = diagRefPath(this, null) || "query";
+          return origQueryGet.apply(this, args).then((snap) => {
+            log("sdk query get " + label, Math.max(1, (snap && snap.size) || 0), 0);
+            return snap;
+          });
+        };
+        QueryProto.__diagQueryPatched = true;
+      }
+      const origQuerySnap = QueryProto.onSnapshot;
+      if (typeof origQuerySnap === "function" && !QueryProto.__diagSnapPatched) {
+        QueryProto.onSnapshot = function (...args) {
+          const label = diagRefPath(this, null) || "query";
+          let first = true;
+          const wrapped = diagWrapObserverArgs(args, (snap) => {
+            if (first) { first = false; log("sdk live query " + label, Math.max(1, (snap && snap.size) || 0), 0); }
+            else {
+              let n = 0;
+              try { n = (snap && snap.docChanges ? snap.docChanges().length : 1) || 0; } catch (_) { n = 1; }
+              if (n > 0) log("sdk live query update " + label, n, 0);
+            }
+          });
+          return origQuerySnap.apply(this, wrapped);
+        };
+        QueryProto.__diagSnapPatched = true;
+      }
+
+      const origAdd = ColProto.add;
+      if (typeof origAdd === "function") {
+        ColProto.add = function (...args) { log("sdk col add " + diagRefPath(this, "col"), 0, 1); return origAdd.apply(this, args); };
+      }
+
+      ["set", "update", "delete", "create"].forEach((m) => {
+        const orig = BatchProto[m];
+        if (typeof orig === "function") {
+          BatchProto[m] = function (...args) {
+            try { this.__diagWrites = (this.__diagWrites || 0) + 1; } catch (_) {}
+            return orig.apply(this, args);
+          };
+        }
+      });
+      const origCommit = BatchProto.commit;
+      if (typeof origCommit === "function") {
+        BatchProto.commit = function (...args) {
+          let n = 0;
+          try { n = this.__diagWrites || 0; this.__diagWrites = 0; } catch (_) {}
+          if (n > 0) log("sdk batch commit (" + n + " ops)", 0, n);
+          return origCommit.apply(this, args);
+        };
+      }
+
+      DocProto.__diagPatched = true;
+      return true;
+    } catch (_) { return false; }
+  }
+  // firebase compat loads before this file, but retry in case init races.
+  (function ensureSdkPatch(tries) {
+    if (patchFirestoreSDK()) return;
+    if (tries > 0) setTimeout(() => ensureSdkPatch(tries - 1), 500);
+  })(10);
+  window.__diagPatchFirestore = patchFirestoreSDK;
 
 })();

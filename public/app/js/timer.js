@@ -508,6 +508,9 @@
             window.StudyParty.togglePartyState();
             return;
         }
+        // Lazy cloud load: the boot-time fetch is skipped when the timer
+        // UI isn't on the page, so pull state on first real use instead.
+        try { if (!state.loaded) loadFromCloud(); } catch (_) {}
         state.running ? pause() : start(); 
     };
     window.resetPomo = function () { reset(); };
@@ -550,10 +553,12 @@
     function init() {
         applySettingsToState();
         renderAll();
-        // Wait for auth then load
+        // Wait for auth then load — but ONLY when the timer UI actually
+        // exists on the page. Otherwise this is 1 wasted Firestore read
+        // on every boot for a dormant feature.
         try {
             firebase.auth().onAuthStateChanged(u => {
-                if (u) loadFromCloud();
+                if (u && document.getElementById('pomo-pill')) loadFromCloud();
             });
         } catch {}
     }

@@ -74,8 +74,13 @@ async function initApp(user) {
                 try {
                     let hasCountry = false;
                     try {
-                        const snap = await firebase.firestore().collection("users_index").doc(u0.uid).get();
-                        hasCountry = !!(snap.exists && snap.data() && snap.data().country);
+                        if (window.getUsersIndexDoc) {
+                            const rec = await window.getUsersIndexDoc(u0.uid);
+                            hasCountry = !!(rec.exists && rec.data && rec.data.country);
+                        } else {
+                            const snap = await firebase.firestore().collection("users_index").doc(u0.uid).get();
+                            hasCountry = !!(snap.exists && snap.data() && snap.data().country);
+                        }
                     } catch (_) {}
                     if (!hasCountry) window.showWelcomeOnboarding();
                 } catch (_) {}

@@ -134,6 +134,7 @@
 
   window.toggleNotifications = function() {
     ensurePanel();
+    ensureListener(); // lazy-attach: first open pays the 1 read, boots pay 0
     if (panel.style.display === "none") {
       panel.style.display = "block";
       positionPanel();
@@ -201,6 +202,7 @@
 
   window.toggleNotifPanel = function () {
     ensurePanel();
+    ensureListener(); // lazy-attach: first open pays the 1 read, boots pay 0
     const open = panel.style.display !== "none";
     if (open) { panel.style.display = "none"; return; }
     positionPanel();
@@ -210,6 +212,7 @@
 
   function attachListener(uid) {
     if (unsub) { try { unsub(); } catch (_) {} unsub = null; }
+    attachedUid = uid;
     const db = firebase.firestore();
     unsub = db.collection("users").doc(uid).collection("notifications")
       .orderBy("createdAt", "desc").limit(30)
@@ -237,13 +240,30 @@
       }, (err) => console.warn("[notif] listener error", err));
   }
 
+  // Lazy listener: attaching on boot costs 1 read every session for a
+  // badge most users never look at. First bell/panel open attaches it;
+  // it then stays live for the rest of the session.
+  let attachedUid = null;
+  function ensureListener() {
+    try {
+      const u = window.firebase && firebase.auth && firebase.auth().currentUser;
+      if (!u) return;
+      if (unsub && attachedUid === u.uid) return;
+      attachListener(u.uid);
+    } catch (_) {}
+  }
+
   function init() {
     if (!window.firebase || !firebase.auth) return;
     if (window.__notifAuthUnsub) { try { window.__notifAuthUnsub(); } catch (_) {} }
     window.__notifAuthUnsub = firebase.auth().onAuthStateChanged((u) => {
-      if (u) attachListener(u.uid);
-      else {
+      if (u) {
         if (unsub) { try { unsub(); } catch (_) {} unsub = null; }
+        attachedUid = null;
+        items = []; renderBadge();
+      } else {
+        if (unsub) { try { unsub(); } catch (_) {} unsub = null; }
+        attachedUid = null;
         items = []; renderBadge();
       }
     });
