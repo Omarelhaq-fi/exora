@@ -12,6 +12,7 @@ import {
   fetchAuthLastLogins,
   fetchAuthUsers,
   invalidateKeyCache,
+  dbStats,
 } from "@/lib/firebase.server";
 import {
   readCreditConfig,
@@ -738,16 +739,24 @@ export const Route = createFileRoute("/api/admin")({
         const action = url.searchParams.get("action");
 
         if (action === "whoami") {
-          try {
-            await requireAdmin(request);
-            return json({ admin: true }, 200, cors);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : "";
-            if (msg.includes("FIREBASE_SERVICE_ACCOUNT_JSON")) {
-              return json({ error: "Server auth not configured (FIREBASE_SERVICE_ACCOUNT_JSON missing)" }, 503, cors);
+          return dbStats.run({reads: 0, writes: 0}, async () => {
+            const store = dbStats.getStore();
+            const statsHeaders = {
+              "x-firestore-reads": store ? String(store.reads) : "0",
+              "x-firestore-writes": store ? String(store.writes) : "0",
+              ...cors,
+            };
+            try {
+              await requireAdmin(request);
+              return json({ admin: true }, 200, statsHeaders);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : "";
+              if (msg.includes("FIREBASE_SERVICE_ACCOUNT_JSON")) {
+                return json({ error: "Server auth not configured (FIREBASE_SERVICE_ACCOUNT_JSON missing)" }, 503, statsHeaders);
+              }
+              return json({ admin: false }, 200, statsHeaders);
             }
-            return json({ admin: false }, 200, cors);
-          }
+          });
         }
 
         try { await requireAdmin(request); }

@@ -14,15 +14,29 @@ globalThis.fetch = async function(...args) {
     const store = dbStats.getStore();
     if (store && args[0] && args[0].toString().includes("firestore.googleapis.com")) {
         try {
+            const urlStr = args[0].toString();
             const clone = res.clone();
-            const data = await clone.json();
+            const data = await clone.json().catch(() => null);
             let r = 0;
             let w = 0;
             
             const method = (args[1]?.method || "GET").toUpperCase();
-            if (method === "GET") {
-                if (data.documents) r = data.documents.length;
-                else if (data.fields) r = 1;
+            if (urlStr.includes(":runAggregationQuery")) {
+                // Aggregation (count/sum/avg) bills 1 document read.
+                if (res.ok) r = 1;
+            } else if (urlStr.includes(":runQuery")) {
+                // Structured query: 1 billed read per returned document,
+                // minimum 1 per query even when empty.
+                if (res.ok && Array.isArray(data)) {
+                    const docs = data.filter((el: any) => el && el.document).length;
+                    r = Math.max(1, docs);
+                } else if (res.ok) {
+                    r = 1;
+                }
+            } else if (method === "GET") {
+                if (data && Array.isArray((data as any).documents)) r = (data as any).documents.length;
+                else if (data && (data as any).fields) r = 1;
+                else if (res.ok || res.status === 404) r = 1; // lookup billed even on miss/empty
             } else if (method === "POST") {
                 if (data.writeResults) w = data.writeResults.length;
                 else if (args[0].toString().includes(":commit")) {

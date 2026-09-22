@@ -4,14 +4,20 @@
 // account, so the browser SDK never needs write access to those fields.
 
 import { createFileRoute } from "@tanstack/react-router";
-import { getServiceAccount, getGoogleAccessToken, verifyFirebaseIdToken } from "@/lib/firebase.server";
+import { getServiceAccount, getGoogleAccessToken, verifyFirebaseIdToken, dbStats } from "@/lib/firebase.server";
 import { getCorsHeaders } from "@/lib/cors";
 import { getClientIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit.server";
 
 function json(body: unknown, status: number, cors: Record<string, string>) {
+  const store = dbStats.getStore();
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...cors },
+    headers: {
+      "content-type": "application/json",
+      "x-firestore-reads": store ? String(store.reads) : "0",
+      "x-firestore-writes": store ? String(store.writes) : "0",
+      ...cors,
+    },
   });
 }
 
@@ -43,6 +49,7 @@ export const Route = createFileRoute("/api/activity")({
         return new Response(null, { status: 204, headers: cors });
       },
       POST: async ({ request }) => {
+        return dbStats.run({reads: 0, writes: 0}, async () => {
         const cors = getCorsHeaders(request, { methods: "POST, OPTIONS" });
         try {
           const auth = request.headers.get("authorization") || "";
@@ -69,6 +76,7 @@ export const Route = createFileRoute("/api/activity")({
           console.error("[activity]", (e as Error).message);
           return json({ error: "Server error" }, 500, cors);
         }
+        });
       },
     },
   },

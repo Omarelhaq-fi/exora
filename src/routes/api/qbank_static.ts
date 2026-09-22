@@ -40,6 +40,11 @@ async function encryptDRM(text: string) {
   return btoa(binary);
 }
 
+// QBank metadata (storage_provider) rarely changes. 5-min shared cache
+// avoids 1 Firestore read on every CDN origin miss.
+const metaCache = new Map<string, { provider: string | undefined; exp: number }>();
+const META_TTL_MS = 5 * 60_000;
+
 export const Route = createFileRoute("/api/qbank_static")({
   server: {
     handlers: {
@@ -72,11 +77,18 @@ export const Route = createFileRoute("/api/qbank_static")({
 
           const questions: any[] = [];
           
-          // Fetch QBank metadata to check storage provider
-          const metaUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
-          const metaRes = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
-          const metaData = metaRes.ok ? await metaRes.json() : {};
-          const storageProvider = metaData.fields?.storage_provider?.stringValue;
+          // Fetch QBank metadata to check storage provider (cached: 0 reads when warm)
+          let storageProvider: string | undefined;
+          const metaHit = metaCache.get(qbankId);
+          if (metaHit && metaHit.exp > Date.now()) {
+            storageProvider = metaHit.provider;
+          } else {
+            const metaUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
+            const metaRes = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
+            const metaData = metaRes.ok ? await metaRes.json() : {};
+            storageProvider = metaData.fields?.storage_provider?.stringValue;
+            metaCache.set(qbankId, { provider: storageProvider, exp: Date.now() + META_TTL_MS });
+          }
 
           let fetchedFromChunks = false;
 

@@ -174,7 +174,51 @@ async function loadAllBanks(
   return qbanks;
 }
 
+// Shared access bundle: caller profile + visible bank ids. Single source of
+// truth for bootstrap_access AND get_questions?includeAccess=1 so the two
+// can never diverge (batched piggyback must equal the standalone call).
+function buildAccessBundle(
+  profile: { country: string; grants: string[] },
+  allBanks: QbankListEntry[],
+): { profileCountry: string; mainIds: string[]; prepIds: string[]; grants: string[]; legacy: boolean } {
+  const country = profile.country;
+  const grants = profile.grants;
+  // Legacy/admin accounts have no country on file -> full access
+  // (gating only applies to accounts created AFTER country selection)
+  const legacy = !country;
+  const bankCountry = (b: { country: string }) => String(b.country || "global").toLowerCase();
+  const mainIds = legacy
+    ? allBanks.filter(b => b.kind !== "exam_prep").map(b => b.id)
+    : allBanks.filter(b => b.kind !== "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
+  const prepIds = legacy
+    ? allBanks.filter(b => b.kind === "exam_prep").map(b => b.id)
+    : allBanks.filter(b => b.kind === "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
+  return { profileCountry: country, mainIds, prepIds, grants, legacy };
+}
+
 const DRM_KEY_STR = process.env.DRM_KEY || "8f7e6d5c4b3a29108f7e6d5c4b3a2910";
+// Exam-prep list: static-ish admin content. 5-min shared cache avoids a full
+// collection scan (N reads) on every call.
+let examPrepCache: { items: any[]; exp: number } | null = null;
+const EXAM_PREP_TTL_MS = 5 * 60_000;
+// Study concepts are identical for every user asking the same question.
+// 10-min shared cache turns repeat views into 0 Firestore reads.
+const studyConceptCache = new Map<string, { data: { studyConcept: string | null; studyConceptLang: string | null }; exp: number }>();
+const STUDY_CONCEPT_TTL_MS = 10 * 60_000;
+const STUDY_CONCEPT_MAX = 500;
+function getCachedStudyConcept(key: string) {
+  const e = studyConceptCache.get(key);
+  if (!e) return null;
+  if (Date.now() > e.exp) { studyConceptCache.delete(key); return null; }
+  return e.data;
+}
+function setCachedStudyConcept(key: string, data: { studyConcept: string | null; studyConceptLang: string | null }) {
+  if (studyConceptCache.size >= STUDY_CONCEPT_MAX) {
+    const first = studyConceptCache.keys().next().value as string | undefined;
+    if (first) studyConceptCache.delete(first);
+  }
+  studyConceptCache.set(key, { data, exp: Date.now() + STUDY_CONCEPT_TTL_MS });
+}
 async function encryptDRM(text: string) {
   const encoder = new TextEncoder();
   const keyData = encoder.encode(DRM_KEY_STR);
@@ -287,6 +331,10 @@ export const Route = createFileRoute("/api/qbank")({
           }
 
           if (action === "list_exam_prep") {
+            const nowEp = Date.now();
+            if (examPrepCache && examPrepCache.exp > nowEp) {
+              return json({ items: examPrepCache.items, cached: true }, 200, cors);
+            }
             const items: any[] = [];
             let epToken = "";
             while (true) {
@@ -320,6 +368,7 @@ export const Route = createFileRoute("/api/qbank")({
               epToken = d.nextPageToken || "";
               if (!epToken) break;
             }
+            examPrepCache = { items, exp: Date.now() + EXAM_PREP_TTL_MS };
             return json({ items }, 200, cors);
           }
 
@@ -336,18 +385,7 @@ export const Route = createFileRoute("/api/qbank")({
             // if the bank listing is unreachable — same as before caching.
             const allBanks = await loadAllBanks(sa, token).catch(() => []);
 
-            // Legacy/admin accounts have no country on file -> full access
-            // (gating only applies to accounts created AFTER country selection)
-            const legacy = !country;
-            const bankCountry = (b: { country: string }) => String(b.country || "global").toLowerCase();
-            const mainIds = legacy
-              ? allBanks.filter(b => b.kind !== "exam_prep").map(b => b.id)
-              : allBanks.filter(b => b.kind !== "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
-            const prepIds = legacy
-              ? allBanks.filter(b => b.kind === "exam_prep").map(b => b.id)
-              : allBanks.filter(b => b.kind === "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
-
-            return json({ profileCountry: country, mainIds, prepIds, grants, legacy }, 200, cors);
+            return json(buildAccessBundle({ country, grants }, allBanks), 200, cors);
           }
 
 
@@ -434,6 +472,19 @@ export const Route = createFileRoute("/api/qbank")({
                   grantListed: access.profile.grants.includes(qbankId),
                 },
               }, 403, cors);
+            }
+
+            // Batched access bundle (?includeAccess=1): lets the client skip
+            // the standalone bootstrap_access roundtrip. The profile is
+            // already loaded for the check above and bank metadata comes
+            // from the shared list cache, so this costs 0 extra Firestore
+            // reads when warm.
+            let accessBundle: ReturnType<typeof buildAccessBundle> | null = null;
+            if (urlObj.searchParams.get("includeAccess") === "1" || urlObj.searchParams.get("includeAccess") === "true") {
+              try {
+                const allBanks = await loadAllBanks(sa, token).catch(() => []);
+                accessBundle = buildAccessBundle(access.profile, allBanks);
+              } catch { /* progress still returns, just without the bundle */ }
             }
 
             const questions: any[] = [];
@@ -583,10 +634,10 @@ export const Route = createFileRoute("/api/qbank")({
             if (!onlyProgress && questions.length > 0) {
               const questionsJson = JSON.stringify(questions);
               const encryptedQuestions = await encryptDRM(questionsJson);
-              return json({ encryptedQuestions, progress: progressMap }, 200, cors);
+              return json({ encryptedQuestions, progress: progressMap, ...(accessBundle ? { access: accessBundle } : {}) }, 200, cors);
             }
 
-            return json({ questions, progress: progressMap }, 200, cors);
+            return json({ questions, progress: progressMap, ...(accessBundle ? { access: accessBundle } : {}) }, 200, cors);
           }
 
           if (action === "get_study_concept") {
@@ -594,6 +645,10 @@ export const Route = createFileRoute("/api/qbank")({
             const questionId = urlObj.searchParams.get("questionId");
             if (!qbankId || !questionId) return json({ error: "Missing ids" }, 400, cors);
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId) || !/^[a-zA-Z0-9_-]+$/.test(questionId)) return json({ error: "Invalid ids" }, 400, cors);
+
+            const cacheKey = `${qbankId}/${questionId}`;
+            const hit = getCachedStudyConcept(cacheKey);
+            if (hit) return json({ ...hit, cached: true }, 200, cors);
 
             const r = await fetch(
               `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/questions/${questionId}`,
@@ -604,6 +659,9 @@ export const Route = createFileRoute("/api/qbank")({
             const doc = await r.json();
             const studyConcept = doc.fields?.studyConcept?.stringValue || null;
             const studyConceptLang = doc.fields?.studyConceptLang?.stringValue || null;
+            // Only cache when a concept exists; misses stay uncached so a
+            // just-generated concept is visible immediately.
+            if (studyConcept) setCachedStudyConcept(cacheKey, { studyConcept, studyConceptLang });
             return json({ studyConcept, studyConceptLang }, 200, cors);
           }
 
@@ -1071,6 +1129,7 @@ export const Route = createFileRoute("/api/qbank")({
               console.error("Save study concept failed", errTxt);
               return json({ error: "Failed to save study concept" }, 500, cors);
             }
+            setCachedStudyConcept(`${qbankId}/${questionId}`, { studyConcept: String(studyConcept), studyConceptLang: conceptLang });
             return json({ ok: true }, 200, cors);
           }
           
