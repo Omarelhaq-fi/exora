@@ -64,7 +64,10 @@
   const DB_VERSION = 2;
 
   const KV_KEYS = {
-    QBANK_LIST: "qbank_list:v1",
+    // v2: v1 briefly cached a per-user FILTERED bank list (since reverted to
+    // the full list server-side). Bump forces one fresh fetch; stale v1 rows
+    // are simply never read again.
+    QBANK_LIST: "qbank_list:v2",
     PEER_THRESHOLD: "peer_threshold:v1",
     studyConcept: (bankId, qid, lang) => `study_concept:v1:${bankId}:${qid}:${lang || "auto"}`,
   };
