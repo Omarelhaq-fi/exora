@@ -169,6 +169,8 @@
         if (user) {
           cachedAuthToken = await user.getIdToken();
           setTimeout(flushSyncQueue, 1500);
+          // Drain any peer votes left queued by a previous session/tab.
+          try { if (window.flushPeerVotes) setTimeout(() => window.flushPeerVotes(), 3000); } catch (_) {}
         } else {
           cachedAuthToken = null;
         }
@@ -209,14 +211,60 @@
     if (document.visibilityState === 'hidden') {
       isSyncing = false; // Force allow!
       flushSyncQueue();
+      try { if (window.flushPeerVotes) window.flushPeerVotes(); } catch (_) {}
     }
   });
   window.addEventListener('pagehide', () => {
     isSyncing = false; // Force allow!
     flushSyncQueue();
+    try { if (window.flushPeerVotes) window.flushPeerVotes(); } catch (_) {}
   });
 
   const pendingApiGets = new Map();
+  // On-demand answers (memory only, never persisted): stems ship in bulk,
+  // correctIndices/explanation are fetched per block via get_answers (max 50
+  // ids/call, server-throttled). Bulk scrape becomes thousands of calls.
+  window.qbankAnswerCache = window.qbankAnswerCache || {};
+  window.ensureQBankAnswers = async function(qbankId, ids) {
+    if (!qbankId || !Array.isArray(ids) || ids.length === 0) return {};
+    if (!window.qbankAnswerCache[qbankId]) window.qbankAnswerCache[qbankId] = {};
+    const cache = window.qbankAnswerCache[qbankId];
+    const missing = [...new Set(ids)].filter(id => !cache[id]);
+    for (let i = 0; i < missing.length; i += 50) {
+      const batch = missing.slice(i, i + 50);
+      try {
+        const res = await apiGet("get_answers", { qbankId, ids: batch.join(",") });
+        const ans = (res && res.answers) || {};
+        for (const [qid, a] of Object.entries(ans)) cache[qid] = a;
+        // Mark unfound so we don't refetch every render.
+        for (const qid of batch) if (!cache[qid]) cache[qid] = {};
+      } catch (e) {
+        console.warn("get_answers failed", e);
+        break;
+      }
+    }
+    const out = {};
+    for (const id of ids) if (cache[id]) out[id] = cache[id];
+    return out;
+  };
+  window.mergeQBankAnswers = function(questions, qbankId) {
+    const cache = (window.qbankAnswerCache && window.qbankAnswerCache[qbankId]) || {};
+    for (const q of (questions || [])) {
+      try {
+        const a = q && q.id ? cache[q.id] : null;
+        if (!a || typeof a !== "object") continue;
+        if (!q.data || typeof q.data !== "object") continue;
+        // Only fill gaps (keeps backward compat with old full IDB caches).
+        for (const [k, v] of Object.entries(a)) {
+          if (q.data[k] === undefined && v !== undefined) q.data[k] = v;
+        }
+        if (q.data.correctIndices === undefined && typeof q.data.correctOptionIndex === "number") {
+          q.data.correctIndices = [q.data.correctOptionIndex];
+        }
+      } catch (_) {}
+    }
+    return questions;
+  };
   async function apiGet(action, params = {}) {
     const qs = new URLSearchParams({ action, ...params }).toString();
     if (pendingApiGets.has(qs)) return pendingApiGets.get(qs);
@@ -226,14 +274,23 @@
       if (!_u) throw new Error("Not signed in");
       const token = await _u.getIdToken();
       if (!token) throw new Error("Not signed in");
+      const headers = { Authorization: `Bearer ${token}` };
+      try {
+        if (window.getAppCheckToken) {
+          const ac = await window.getAppCheckToken();
+          if (ac) headers["X-Firebase-AppCheck"] = ac;
+        }
+      } catch (_) {}
       const res = await fetch(`/api/qbank?${qs}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "API error");
       if (data.encryptedQuestions) {
         try {
-            const jsonStr = await window.decryptDRM(data.encryptedQuestions);
+            const bid = params.qbankId || params.qbankid || null;
+            if (!bid) throw new Error("Missing qbankId for decrypt");
+            const jsonStr = await window.decryptQBankPayload(data.encryptedQuestions, bid);
             data.questions = JSON.parse(jsonStr);
         } catch(e) {
             console.error("DRM decryption failed", e);
@@ -812,32 +869,36 @@
                   const res = await apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true, includeAccess: true });
                   cachedQBanks[activeQBankId] = { questions: idbData.questions, progress: applyLocalQueueProgress(activeQBankId, res.progress || {}) };
                   if (res.access) batchedAccess = res.access;
-              } else {
-                 // Questions outdated or missing — download from CDN static endpoint
-                 // (no Auth header = Vercel Edge CDN will cache this globally)
-                 const [staticRes, progressRes] = await Promise.all([
-                   (async () => {
-                     const r = await fetch(`/api/qbank_static?qbankId=${encodeURIComponent(activeQBankId)}&v=${encodeURIComponent(catUpdated)}`);
-                     const d = await r.json();
-                     if (!r.ok) throw new Error(d.error || 'CDN fetch failed');
-                     let questions = d.questions || [];
-                     if (d.encryptedQuestions && window.decryptDRM) {
-                       try {
-                         const jsonStr = await window.decryptDRM(d.encryptedQuestions);
-                         questions = JSON.parse(jsonStr);
-                       } catch(e) { console.error('DRM decryption failed', e); }
-                     }
-                     return questions;
-                   })(),
-                    apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true, includeAccess: true })
-                  ]);
+               } else {
+                  // Questions outdated or missing — download stems from the
+                  // authenticated private static endpoint (per-bank key, no
+                  // public CDN cache) + progress/access in parallel.
+                  const [staticRes, progressRes] = await Promise.all([
+                    (async () => {
+                      const headers = await window.qbankAuthHeaders();
+                      const r = await fetch(`/api/qbank_static?qbankId=${encodeURIComponent(activeQBankId)}&v=${encodeURIComponent(catUpdated)}`, { headers });
+                      const d = await r.json();
+                      if (!r.ok) throw new Error(d.error || 'Static fetch failed');
+                      let questions = d.questions || [];
+                      if (d.encryptedQuestions && window.decryptQBankPayload) {
+                        try {
+                          const jsonStr = await window.decryptQBankPayload(d.encryptedQuestions, activeQBankId);
+                          questions = JSON.parse(jsonStr);
+                        } catch(e) { console.error('DRM decryption failed', e); }
+                      }
+                      return questions;
+                    })(),
+                     apiGet("get_questions", { qbankId: activeQBankId, onlyProgress: true, includeAccess: true })
+                   ]);
                   const questions = staticRes;
                   const progress = progressRes.progress || {};
                   if (progressRes.access) batchedAccess = progressRes.access;
                   cachedQBanks[activeQBankId] = { questions, progress: applyLocalQueueProgress(activeQBankId, progress) };
-                  // Persist to IndexedDB so next visit is instant
+                  // Persist STEMS to IndexedDB so next visit is instant.
+                  // Answers are never persisted: they are fetched per block
+                  // via get_answers (memory only).
                   setCachedQBank(activeQBankId, { updatedAt: catUpdated, questions });
-              }
+               }
            } catch (e) {
                const msg = String((e && e.message) || e);
                if (/forbidden|403/i.test(msg)) {
@@ -2342,7 +2403,7 @@
     });
   };
 
-  window.startQBankFiltered = function(subject, chapter = null, reviewIncorrectsOnly = false) {
+  window.startQBankFiltered = async function(subject, chapter = null, reviewIncorrectsOnly = false) {
     // If subject contains a hyphen and chapter is not provided, try to parse them from the combined string (e.g. from last session)
     if (subject && !chapter && subject.includes(" - ")) {
         const parts = subject.split(" - ");
@@ -2402,6 +2463,11 @@
     });
 
     // (Removed random shuffle to ensure stable question ordering across sessions)
+
+    // Answer split: stems render immediately; answer slices load lazily via
+    // the render-window prefetch in qbankRenderCurrent (fire-and-forget) +
+    // await-on-demand in qbankSelectOption. No whole-block prefetch: a 37k
+    // "All subjects" block must not fan out to hundreds of requests.
     
     let firstUnsolved = 0;
     for (let i = 0; i < currentQuestions.length; i++) {
@@ -2710,7 +2776,9 @@
     const data = q.data || {};
     
     const correctIndices = Array.isArray(data.correctIndices) ? data.correctIndices : (data.correctOptionIndex !== undefined ? [data.correctOptionIndex] : []);
-    const isMultiple = correctIndices.length > 1;
+    // Answer split: while the slice is in flight, fall back to the
+    // non-sensitive `multi` stem flag so QCM still renders as checkboxes.
+    const isMultiple = correctIndices.length > 1 || (correctIndices.length === 0 && data.multi === true);
     
     const inPartyMode = window.QBankParty && window.QBankParty.state.party;
     let optionsHtml = '';
@@ -2723,16 +2791,18 @@
       
       optionsHtml = data.options.map((opt, i) => {
         let peerPercent = '';
+        // New batched writes land in userCounts; ancient docs used counts.
+        const voteCounts = (peerStats && (peerStats.userCounts || peerStats.counts)) || null;
         
         // Admin always sees real percentages
-        if (isAdmin && peerStats && peerStats.counts) {
-          const count = peerStats.counts[i] || 0;
+        if (isAdmin && peerStats && voteCounts) {
+          const count = voteCounts[i] || 0;
           const pct = peerStats.total > 0 ? Math.round((count / peerStats.total) * 100) : 0;
           peerPercent = `<span style="font-size:11px; color:#6b7280; margin-left:8px; font-weight:600;">${pct}%</span>`;
         }
         // Regular users only see percentages when threshold is met
-        else if (showPeerStats && peerStats.counts) {
-          const count = peerStats.counts[i] || 0;
+        else if (showPeerStats && voteCounts) {
+          const count = voteCounts[i] || 0;
           const pct = peerStats.total > 0 ? Math.round((count / peerStats.total) * 100) : 0;
           peerPercent = `<span style="font-size:11px; color:#6b7280; margin-left:8px; font-weight:600;">${pct}%</span>`;
         }
@@ -2761,6 +2831,35 @@
           window.qbankUpdatePeerPercentages(q.id, stats);
         }
       }).catch(() => {});
+    }
+
+    // Answer-split prefetch: current + next 10, fire-and-forget. Answers land
+    // in memory (never IDB) well before the user answers; qbankSelectOption
+    // awaits the single slice as fallback. Served from R2 (0 Firestore reads).
+    window.__qbankRenderedMulti = isMultiple;
+    window.__qbankRenderedQid = q.id;
+    if (q.id && typeof window.ensureQBankAnswers === "function") {
+      const winIds = [];
+      for (let k = currentIndex; k < Math.min(currentIndex + 11, currentQuestions.length); k++) {
+        const qq = currentQuestions[k];
+        if (qq && qq.id && !(qq.data && (qq.data.correctIndices !== undefined || qq.data.correctOptionIndex !== undefined))) winIds.push(qq.id);
+      }
+      if (winIds.length) {
+        window.ensureQBankAnswers(currentQBankId, winIds).then(() => {
+          if (typeof window.mergeQBankAnswers === "function") window.mergeQBankAnswers(currentQuestions, currentQBankId);
+          // Stale-cache repair: stems saved before the `multi` flag existed
+          // may have rendered QCM as QCS. Re-render once if unanswered and
+          // the arrived slice flips the input type.
+          if (qbankTimer && currentQuestions[currentIndex] && currentQuestions[currentIndex].id === q.id
+              && window.__qbankRenderedQid === q.id) {
+            const dd = currentQuestions[currentIndex].data || {};
+            const ci = Array.isArray(dd.correctIndices) ? dd.correctIndices : [];
+            if (ci.length > 0 && (ci.length > 1) !== window.__qbankRenderedMulti) {
+              window.qbankRenderCurrent();
+            }
+          }
+        }).catch(() => {});
+      }
     }
 
     let submitHtml = '';
@@ -2932,6 +3031,16 @@
     currentQuestionTimeMs = Date.now() - questionStartTime;
     const q = currentQuestions[currentIndex];
     const data = q.data || {};
+    // Answer split: the slice is usually prefetched by the render window;
+    // await it here as fallback so grading never runs on missing answers.
+    if (q && q.id && !(data.correctIndices !== undefined || data.correctOptionIndex !== undefined)) {
+      try {
+        if (typeof window.ensureQBankAnswers === "function") {
+          await window.ensureQBankAnswers(currentQBankId, [q.id]);
+          if (typeof window.mergeQBankAnswers === "function") window.mergeQBankAnswers([q], currentQBankId);
+        }
+      } catch (_) {}
+    }
     const correctIndices = Array.isArray(data.correctIndices) ? data.correctIndices : (data.correctOptionIndex !== undefined ? [data.correctOptionIndex] : []);
     const isMultiple = correctIndices.length > 1;
 
@@ -3037,7 +3146,10 @@
       const studyBtn = document.getElementById("qbank-study-btn");
       if (studyBtn) {
         studyBtn.classList.add("qbank-study-glow");
-        // Auto-open study concept when wrong or partially correct
+        // Auto-open study concept when wrong or partially correct.
+        // Cost is one-time per question globally: first wrong answer pays
+        // 1r + 1 AI call + save, then it's cached (server 10-min + IDB
+        // forever) and free for every future student.
         window.generateStudyConcept(q.id);
       }
     }
@@ -3092,9 +3204,12 @@
     const peerThreshold = window.qbankPeerThreshold || 50;
     const isAdmin = window.isAdminCache || false;
     
-    // Count unique users (not total answers)
+    // Threshold + denominator use `total` (server increments it blindly per
+    // batched vote). The users map no longer grows server-side, so unique
+    // counting would freeze; total ≈ unique thanks to client dedupe.
     const uniqueUsers = stats && stats.users ? Object.keys(stats.users).length : 0;
-    const showPeerStats = uniqueUsers >= peerThreshold;
+    const totalVotes = (stats && typeof stats.total === "number" && stats.total > 0) ? stats.total : uniqueUsers;
+    const showPeerStats = totalVotes >= peerThreshold;
     
     // Update each option's percentage
     const container = document.getElementById("qbank-options-container");
@@ -3108,10 +3223,11 @@
       
       let peerPercent = '';
       
-      // Calculate percentages based on unique users
-      if (stats && stats.userCounts) {
-        const totalUsers = uniqueUsers;
-        const count = stats.userCounts[i] || 0;
+      // Calculate percentages based on vote totals
+      if (stats && (stats.userCounts || stats.counts)) {
+        const counts = stats.userCounts || stats.counts;
+        const totalUsers = totalVotes;
+        const count = counts[i] || 0;
         const pct = totalUsers > 0 ? Math.round((count / totalUsers) * 100) : 0;
         
         if (showPeerStats) {
@@ -3119,7 +3235,7 @@
           peerPercent = `<span class="peer-percent" style="font-size:11px; color:#6b7280; margin-left:8px; font-weight:600;">${pct}%</span>`;
         } else if (isAdmin) {
           // Admin sees pending status
-          peerPercent = `<span class="peer-percent" style="font-size:10px; color:#9ca3af; margin-left:8px;">Pending (${uniqueUsers}/${peerThreshold})</span>`;
+          peerPercent = `<span class="peer-percent" style="font-size:10px; color:#9ca3af; margin-left:8px;">Pending (${totalVotes}/${peerThreshold})</span>`;
         }
       }
       
@@ -3129,82 +3245,153 @@
     });
   };
 
+  // Peer votes: IndexedDB outbox + batched server flush.
+  // Answering used to write questionStats immediately (1w + 1r per answer).
+  // Now the vote queues in IDB (survives tab close, first vote per question
+  // wins) and flushes in batches of ≤50 via batch_log_peer_votes — blind
+  // increments in ONE commit, 0 reads, ~10x fewer write requests.
+  // KILL SWITCH — peer stats fully disabled for now (0 reads + 0 writes).
+  // Re-enable by setting true (server batch endpoint no-ops too, so even
+  // stale cached clients can't write while this is false).
+  const PEER_STATS_ENABLED = false;
+  const PEER_OUTBOX_KEY = "peer_votes_outbox:v1";
+  const PEER_FLUSH_AT = 10;
+  const PEER_MAX_OUTBOX = 500;
+  let peerFlushInflight = null;
+
+  async function peerOutboxGet() {
+    try {
+      const v = await idbKvGet(PEER_OUTBOX_KEY);
+      return Array.isArray(v) ? v : [];
+    } catch (_) { return []; }
+  }
+  async function peerOutboxSet(votes) {
+    try { await idbKvSet(PEER_OUTBOX_KEY, votes); } catch (_) {}
+  }
+  async function peerEnqueue(questionId, selectedIndex) {
+    try {
+      const votes = await peerOutboxGet();
+      if (votes.some(v => v && v.qid === questionId)) return votes;
+      votes.push({ qid: questionId, idx: selectedIndex, ts: Date.now() });
+      while (votes.length > PEER_MAX_OUTBOX) votes.shift();
+      await peerOutboxSet(votes);
+      return votes;
+    } catch (_) { return []; }
+  }
+  async function peerSendBatch(batch) {
+    try {
+      const u = window.firebase && firebase.auth().currentUser;
+      if (!u) return false;
+      const token = await u.getIdToken();
+      if (!token) return false;
+      const headers = { "Content-Type": "application/json", Authorization: "Bearer " + token };
+      try {
+        if (window.getAppCheckToken) {
+          const ac = await window.getAppCheckToken();
+          if (ac) headers["X-Firebase-AppCheck"] = ac;
+        }
+      } catch (_) {}
+      const res = await fetch("/api/qbank", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "batch_log_peer_votes",
+          votes: batch.map(v => ({ questionId: v.qid, selectedIndex: v.idx }))
+        }),
+        keepalive: true
+      });
+      return res.ok;
+    } catch (_) { return false; }
+  }
+  async function flushPeerVotes() {
+    if (peerFlushInflight) return peerFlushInflight;
+    peerFlushInflight = (async () => {
+      try {
+        for (let i = 0; i < 10; i++) {
+          const votes = await peerOutboxGet();
+          if (!votes.length) break;
+          const batch = votes.slice(0, 50);
+          const ok = await peerSendBatch(batch);
+          if (!ok) break; // stay queued, retry on next trigger
+          const fresh = await peerOutboxGet();
+          // Append-only queue: drop exactly the flushed head.
+          await peerOutboxSet(fresh.slice(batch.length));
+          if ((await peerOutboxGet()).length === 0) break;
+        }
+      } catch (_) {}
+    })();
+    try { await peerFlushInflight; }
+    finally { peerFlushInflight = null; }
+  }
+  window.flushPeerVotes = flushPeerVotes;
+  // "Already counted" record (per device): the public stats endpoint no
+  // longer returns the users map (uids of strangers stay private), so the
+  // client tracks its own voted questions in IDB instead of re-reading.
+  const PEER_VOTED_MAX = 5000;
+  const peerVotedKey = (uidKey) => "peer_voted:v1:" + uidKey;
+  async function peerHasVoted(uidKey, questionId) {
+    try {
+      const v = await idbKvGet(peerVotedKey(uidKey));
+      return Array.isArray(v) && v.indexOf(questionId) !== -1;
+    } catch (_) { return false; }
+  }
+  async function peerMarkVoted(uidKey, questionId) {
+    try {
+      let v = await idbKvGet(peerVotedKey(uidKey));
+      if (!Array.isArray(v)) v = [];
+      if (v.indexOf(questionId) === -1) {
+        v.push(questionId);
+        while (v.length > PEER_VOTED_MAX) v.shift();
+        await idbKvSet(peerVotedKey(uidKey), v);
+      }
+    } catch (_) {}
+  }
+  // Periodic drain (once) + unload drain with keepalive below.
+  if (!window.__peerFlushTimer) {
+    window.__peerFlushTimer = true;
+    try { setInterval(() => { flushPeerVotes(); }, 60_000); } catch (_) {}
+  }
+
   // Log answer to global peer statistics (unique users only).
-  // Deduped per session + cache-checked: re-renders and revisits never
-  // trigger another Firestore get().
+  // Deduped per session + outbox + users-map precheck: re-renders, revisits
+  // and repeat sessions never queue (or write) twice. Percentages update
+  // instantly from the optimistic cache patch (0 reads); persistence rides
+  // the next batch flush.
   function _logPeerAnswer(questionId, selectedIndex) {
+    if (!PEER_STATS_ENABLED) return; // disabled: no queue, no write
     try {
       if (!window.__peerLogged) window.__peerLogged = {};
       if (window.__peerLogged[questionId]) return;
-      const fsdb = firebase.firestore();
-      const statsRef = fsdb.collection('questionStats').doc(questionId);
-      const currentUser = firebase.auth && firebase.auth().currentUser;
-      const userId = currentUser ? currentUser.uid : null;
-      // Skip the read entirely when our fresh cache already proves this
-      // user was counted (e.g. revisit after answering elsewhere).
-      if (userId && window.qbankPeerStats && window.qbankPeerStats[questionId] &&
-          window.qbankPeerStats[questionId].users && window.qbankPeerStats[questionId].users[userId]) {
-        window.__peerLogged[questionId] = true;
-        return;
-      }
       window.__peerLogged[questionId] = true;
-      const anonId = userId || ('anonymous_' + Date.now());
-       
-      statsRef.get().then(doc => {
-        if (doc.exists) {
-          const data = doc.data();
-          const users = data.users || {};
-          
-          // Check if user already answered
-          if (users[anonId]) {
-            // User already answered - don't count again
-            return;
-          }
-          
-          // New user - update counts
-          const userCounts = data.userCounts || {};
-          userCounts[selectedIndex] = (userCounts[selectedIndex] || 0) + 1;
-          users[anonId] = true;
-
-          // Optimistically patch the in-memory cache so the post-answer UI
-          // refresh below needs ZERO extra Firestore reads.
+      const currentUser = window.firebase && firebase.auth && firebase.auth().currentUser;
+      const userId = currentUser ? currentUser.uid : null;
+      const uidKey = userId || "anon";
+      // Already counted on this device? (IDB voted-set replaces the old
+      // server users-map check — the public endpoint never sends uids.)
+      peerHasVoted(uidKey, questionId).then(async (voted) => {
+        try {
+          if (voted) return;
+          // Optimistic patch so the post-answer UI refresh needs ZERO reads.
+          // Also refreshes the IDB day entry so reloads keep showing own vote.
+          const cached = window.qbankPeerStats && window.qbankPeerStats[questionId];
           try {
             if (!window.qbankPeerStats) window.qbankPeerStats = {};
             if (!window.__peerStatsTime) window.__peerStatsTime = {};
-            window.qbankPeerStats[questionId] = { ...(data || {}), users, userCounts };
+            const base = cached || {};
+            const users = { ...(base.users || {}) };
+            const userCounts = { ...(base.userCounts || {}) };
+            if (userId) users[userId] = true;
+            userCounts[selectedIndex] = (userCounts[selectedIndex] || 0) + 1;
+            const prevTotal = typeof base.total === "number" ? base.total : Object.keys(users).length;
+            const patched = { ...base, users, userCounts, total: prevTotal + 1 };
+            window.qbankPeerStats[questionId] = patched;
             window.__peerStatsTime[questionId] = Date.now();
+            try { idbKvSet(peerDayKey(questionId), { data: patched, day: peerDayStamp(0) }); } catch (_) {}
           } catch (_) {}
-          
-          statsRef.update({
-            userCounts: userCounts,
-            users: users,
-            total: Object.keys(users).length,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-        } else {
-          // Create new stats doc
-          const userCounts = {};
-          userCounts[selectedIndex] = 1;
-          const users = {};
-          users[anonId] = true;
-
-          try {
-            if (!window.qbankPeerStats) window.qbankPeerStats = {};
-            if (!window.__peerStatsTime) window.__peerStatsTime = {};
-            window.qbankPeerStats[questionId] = { users, userCounts, total: 1 };
-            window.__peerStatsTime[questionId] = Date.now();
-          } catch (_) {}
-          
-          statsRef.set({
-            userCounts: userCounts,
-            users: users,
-            total: 1,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-        }
-      }).catch(err => {
-        console.warn('Failed to log peer answer:', err);
+          await peerMarkVoted(uidKey, questionId);
+          const votes = await peerEnqueue(questionId, selectedIndex);
+          if (votes.length >= PEER_FLUSH_AT) flushPeerVotes();
+        } catch (_) {}
       });
     } catch (e) {
       console.warn('Error logging peer answer:', e);
@@ -3288,12 +3475,33 @@
   }
 
   // Load peer stats for a specific question.
-  // Cached 2 min per question + in-flight dedupe: revisits, re-renders and
-  // the post-answer refresh below cost ZERO extra Firestore reads.
+  // Three cache layers, zero server memory (Vercel-free safe — everything
+  // lives client-side):
+  //   1. memory 15 min (scrolling/re-renders),
+  //   2. IndexedDB day-stamped (survives reloads: at most 1 read per
+  //      question every PEER_STATS_STALE_DAYS — percentages days-stale is
+  //      fine, they're slow aggregates and your own vote patches instantly),
+  //   3. in-flight dedupe (rapid Next/Prev never double-fires).
+  // Tune PEER_STATS_STALE_DAYS up to cut reads further (7 = weekly refresh).
+  const PEER_STATS_STALE_DAYS = 3;
+  function peerDayKey(questionId) { return "peer_stats:v1:" + questionId; }
+  function peerDayStamp(daysBack) {
+    const d = new Date(Date.now() - (daysBack || 0) * 86400000);
+    return d.toISOString().slice(0, 10);
+  }
+  function peerDayFresh(dayStr) {
+    if (!dayStr || typeof dayStr !== "string") return false;
+    const cutoff = peerDayStamp(PEER_STATS_STALE_DAYS);
+    return dayStr >= cutoff;
+  }
   window.loadPeerStats = function(questionId, opts) {
+    if (!PEER_STATS_ENABLED) return Promise.resolve(null); // disabled: 0 reads
     const force = !!(opts && opts.force);
     const now = Date.now();
-    const TTL = 2 * 60_000;
+    // 15-min TTL: peer percentages move slowly (and your own vote patches
+    // instantly on answer), so re-reading every 2 min while scrolling was
+    // pure waste. One read per question per quarter-hour, max.
+    const TTL = 15 * 60_000;
     try {
       if (!force && window.qbankPeerStats && window.qbankPeerStats[questionId] &&
           window.__peerStatsTime && (now - (window.__peerStatsTime[questionId] || 0)) < TTL) {
@@ -3301,21 +3509,28 @@
       }
       if (!window.__peerStatsInflight) window.__peerStatsInflight = {};
       if (!force && window.__peerStatsInflight[questionId]) return window.__peerStatsInflight[questionId];
-      const p = new Promise((resolve) => {
+      const seedFromDayCache = (data) => {
         try {
-          const fsdb = firebase.firestore();
-          fsdb.collection('questionStats').doc(questionId).get().then(doc => {
-          if (doc.exists) {
-            if (!window.qbankPeerStats) window.qbankPeerStats = {};
-            if (!window.__peerStatsTime) window.__peerStatsTime = {};
-            const data = doc.data();
-            // Migrate old format to new format if needed
-            if (!data.userCounts && data.counts) {
-              data.userCounts = data.counts;
-            }
-            window.qbankPeerStats[questionId] = data;
-            window.__peerStatsTime[questionId] = Date.now();
-            resolve(data);
+          if (!window.qbankPeerStats) window.qbankPeerStats = {};
+          if (!window.__peerStatsTime) window.__peerStatsTime = {};
+          window.qbankPeerStats[questionId] = data;
+          window.__peerStatsTime[questionId] = Date.now();
+        } catch (_) {}
+      };
+      const p = new Promise((resolve) => {
+        const fetchFresh = () => {
+        try {
+          // Public CDN-shared endpoint: NO Authorization/AppCheck headers —
+          // anything user-varying fragments the shared edge cache. Response
+          // is anonymous aggregates ({userCounts, total}, never uids) with
+          // 24h s-maxage: all users share one copy per question per day.
+          fetch(`/api/peer-stats?qid=${encodeURIComponent(questionId)}`).then(r => r.json()).then(data => {
+          if (data && !data.error && (data.total || data.userCounts)) {
+            const clean = { userCounts: data.userCounts || {}, total: data.total || 0 };
+            seedFromDayCache(clean);
+            // Persist day-stamped (client IDB = free, survives reloads).
+            try { idbKvSet(peerDayKey(questionId), { data: clean, day: peerDayStamp(0) }); } catch (_) {}
+            resolve(clean);
           } else {
             resolve(null);
           }
@@ -3323,10 +3538,23 @@
           console.warn('Failed to load peer stats:', err);
           resolve(null);
         });
-      } catch (e) {
-        console.warn('Error loading peer stats:', e);
-        resolve(null);
-      }
+        } catch (e) {
+          console.warn('Error loading peer stats:', e);
+          resolve(null);
+        }
+        };
+        if (!force) {
+          idbKvGet(peerDayKey(questionId)).then((dayHit) => {
+            if (dayHit && dayHit.data && peerDayFresh(dayHit.day)) {
+              seedFromDayCache(dayHit.data);
+              resolve(dayHit.data);
+            } else {
+              fetchFresh();
+            }
+          }).catch(() => fetchFresh());
+        } else {
+          fetchFresh();
+        }
       });
       p.finally(() => { if (window.__peerStatsInflight) delete window.__peerStatsInflight[questionId]; });
       window.__peerStatsInflight[questionId] = p;
@@ -4316,7 +4544,7 @@
     try {
       const token = await (window.firebase && firebase.auth().currentUser.getIdToken());
       
-      const getRes = await fetch(`/api/qbank?action=get_study_concept&qbankId=${encodeURIComponent(currentQBankId)}&questionId=${encodeURIComponent(questionId)}`, {
+      const getRes = await fetch(`/api/qbank?action=get_study_concept&qbankId=${encodeURIComponent(currentQBankId)}&questionId=${encodeURIComponent(questionId)}&lang=${encodeURIComponent(conceptLang)}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (getRes.ok) {
@@ -4832,9 +5060,15 @@
       window.qbankPartyStateChanged(false, false);
   };
   
-  window.qbankRevealPartyAnswers = function() {
-       const q = currentQuestions[currentIndex];
-       const data = q.data || {};
+   window.qbankRevealPartyAnswers = async function() {
+        const q = currentQuestions[currentIndex];
+        try {
+          if (q && q.id && typeof window.ensureQBankAnswers === "function") {
+            await window.ensureQBankAnswers(currentQBankId, [q.id]);
+            if (typeof window.mergeQBankAnswers === "function") window.mergeQBankAnswers([q], currentQBankId);
+          }
+        } catch (_) {}
+        const data = q.data || {};
        const correctIndices = Array.isArray(data.correctIndices) ? data.correctIndices : (data.correctOptionIndex !== undefined ? [data.correctOptionIndex] : []);
        
        let u = null;

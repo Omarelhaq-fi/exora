@@ -437,18 +437,20 @@ function _loadQBankFromCache(qbankId) {
                     }
                 }
                 
-                // Fallback: fetch from CDN static endpoint (cacheable by Vercel Edge)
+                // Authenticated private static endpoint (per-bank key, stems-only).
+                // No public CDN cache: requires Firebase ID token, 403s without access.
                 const qCat = (window.cachedCategories || []).find(c => c.id === qbankId);
                 const catUpdated = qCat ? (qCat.updatedAt || 0) : 0;
 
-                const res = await fetch(`/api/qbank_static?qbankId=${encodeURIComponent(qbankId)}&v=${encodeURIComponent(catUpdated)}`);
+                const headers = await window.qbankAuthHeaders();
+                const res = await fetch(`/api/qbank_static?qbankId=${encodeURIComponent(qbankId)}&v=${encodeURIComponent(catUpdated)}`, { headers });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || "API error");
                 
                 let questions = data.questions || [];
                 if (data.encryptedQuestions) {
                     try {
-                        const jsonStr = await window.decryptDRM(data.encryptedQuestions);
+                        const jsonStr = await window.decryptQBankPayload(data.encryptedQuestions, qbankId);
                         questions = JSON.parse(jsonStr);
                     } catch (e) {
                         console.error("DRM decryption failed", e);
@@ -1645,8 +1647,68 @@ try {
 
 
 
-window.decryptDRM = async function(base64Str) {
-    const DRM_KEY_STR = "8f7e6d5c4b3a29108f7e6d5c4b3a2910";
+// Per-bank DRM: keys live in server env only, fetched per bank via
+// POST /api/qbank_key (auth + access-checked, rate-limited, logged) and held
+// in memory ONLY — never localStorage/IndexedDB. No hardcoded key anywhere.
+window.__qbankKeys = window.__qbankKeys || {};
+
+window.getAppCheckToken = async function() {
+    try {
+        if (window.firebase && firebase.appCheck) {
+            const ac = firebase.appCheck();
+            if (ac && typeof ac.getToken === "function") {
+                const t = await ac.getToken(false);
+                const tok = (t && t.token) || (typeof t === "string" ? t : null);
+                if (tok) return tok;
+            }
+        }
+    } catch (_) {}
+    return null;
+};
+
+window.qbankAuthHeaders = async function(extra) {
+    const h = Object.assign({}, extra || {});
+    try {
+        const u = window.firebase && firebase.auth().currentUser;
+        if (u) {
+            const token = await u.getIdToken();
+            if (token) h["Authorization"] = "Bearer " + token;
+        }
+        const ac = await window.getAppCheckToken();
+        if (ac) h["X-Firebase-AppCheck"] = ac;
+    } catch (_) {}
+    return h;
+};
+
+window.getQBankKey = async function(qbankId) {
+    if (!qbankId) throw new Error("Missing qbankId");
+    if (window.__qbankKeys[qbankId]) return window.__qbankKeys[qbankId];
+    if (!window.__qbankKeyPending) window.__qbankKeyPending = {};
+    if (window.__qbankKeyPending[qbankId]) return window.__qbankKeyPending[qbankId];
+    const p = (async () => {
+        const headers = await window.qbankAuthHeaders({ "Content-Type": "application/json" });
+        const res = await fetch("/api/qbank_key", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ qbankId })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+        if (!data.key) throw new Error("Key missing");
+        // Memory only — never persisted.
+        window.__qbankKeys[qbankId] = data.key;
+        return data.key;
+    })();
+    window.__qbankKeyPending[qbankId] = p;
+    try {
+        return await p;
+    } finally {
+        delete window.__qbankKeyPending[qbankId];
+    }
+};
+
+window.decryptDRM = async function(base64Str, keyStr) {
+    if (!keyStr) throw new Error("decryptDRM: per-bank key required (fetch via getQBankKey)");
     const binary_string = atob(base64Str);
     const len = binary_string.length;
     const bytes = new Uint8Array(len);
@@ -1654,10 +1716,15 @@ window.decryptDRM = async function(base64Str) {
     const iv = bytes.slice(0, 12);
     const data = bytes.slice(12);
     const encoder = new TextEncoder();
-    const keyData = encoder.encode(DRM_KEY_STR);
+    const keyData = encoder.encode(keyStr);
     const key = await crypto.subtle.importKey("raw", keyData, { name: "AES-GCM" }, false, ["decrypt"]);
     const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
     return new TextDecoder().decode(decrypted);
+};
+
+window.decryptQBankPayload = async function(encrypted, qbankId) {
+    const key = await window.getQBankKey(qbankId);
+    return window.decryptDRM(encrypted, key);
 };
 
 // Auto-render Lucide icons whenever new [data-lucide] nodes are inserted.
