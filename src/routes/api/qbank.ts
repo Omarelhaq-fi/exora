@@ -10,14 +10,12 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { dbStats } from "@/lib/firebase.server";
 import {
   getQbankListCache,
-  type QbankListEntry,
 } from "@/lib/qbank-cache.server";
 import {
   buildAccessBundle,
   getAccessBundleCached,
   loadAllBanks,
   resolveBankAccessEdge as resolveBankAccess,
-  filterBanksForBundle,
 } from "@/lib/qbank-access.server";
 import { encryptForBank, splitQuestionsForStatic } from "@/lib/qbank-drm.server";
 
@@ -120,31 +118,35 @@ export const Route = createFileRoute("/api/qbank")({
           if (!userLimit.ok) return rateLimitResponse(userLimit.retryAfter, cors);
 
           if (action === "list_categories") {
-            // Version-aware + ACCESS-FILTERED cache. The full list lives in
-            // memory until an admin publish bumps `updatedAt`; filtering to
-            // the caller's bundle happens in-memory (0 extra reads) so we
-            // never leak all 12 bank IDs to everyone. Clients send their
-            // known maxUpdatedAt as `?v=`; a match against THEIR visible max
-            // means "unchanged" with ZERO Firestore reads.
+            // Version-aware cache: the list lives in memory until an admin
+            // publish bumps a bank's `updatedAt` (which invalidates it).
+            // Clients send their known maxUpdatedAt as `?v=`; a match means
+            // "unchanged" with ZERO Firestore reads.
+            //
+            // NOTE: intentionally UNFILTERED (all banks, all users). Bank
+            // ids/names/countries are already world-public via
+            // /api/public/qbanks, so filtering here buys zero protection —
+            // and it breaks the locked-card → "Request Access" discovery
+            // flow (users can't request banks they can't see). Enforcement
+            // lives at the content endpoints (get_questions / qbank_static /
+            // qbank_key / get_answers all 403 by the same country+grant
+            // rule); an id alone grants nothing.
             const clientV = parseInt(urlObj.searchParams.get("v") || "0", 10) || 0;
             try {
-              const bundle = await getAccessBundleCached(sa, token, uid);
-              const respond = (banks: QbankListEntry[], cached: boolean) => {
-                const visible = filterBanksForBundle(banks, bundle);
-                let maxUpdatedAt = 0;
-                for (const b of visible) {
-                  const vNum = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : 0;
-                  if (vNum > maxUpdatedAt) maxUpdatedAt = vNum;
-                }
-                if (clientV && clientV === maxUpdatedAt) {
-                  return json({ unchanged: true, maxUpdatedAt }, 200, cors);
-                }
-                return json({ qbanks: visible, maxUpdatedAt, cached }, 200, cors);
-              };
               const cached = getQbankListCache();
-              if (cached) return respond(cached.banks, true);
+              if (cached) {
+                if (clientV && clientV === cached.maxUpdatedAt) {
+                  return json({ unchanged: true, maxUpdatedAt: cached.maxUpdatedAt }, 200, cors);
+                }
+                return json({ qbanks: cached.banks, maxUpdatedAt: cached.maxUpdatedAt, cached: true }, 200, cors);
+              }
               const qbanks = await loadAllBanks(sa, token);
-              return respond(qbanks, false);
+              const fresh = getQbankListCache();
+              const maxUpdatedAt = fresh ? fresh.maxUpdatedAt : 0;
+              if (clientV && clientV === maxUpdatedAt) {
+                return json({ unchanged: true, maxUpdatedAt }, 200, cors);
+              }
+              return json({ qbanks, maxUpdatedAt }, 200, cors);
             } catch {
               return json({ error: "Failed to load qbanks" }, 500, cors);
             }
