@@ -514,6 +514,16 @@
   window.selectQBank = async function(qbankId) {
       if (!qbankId) return;
       if (!window.db) window.db = {};
+      // Client-side access guard: locked banks route to the request flow
+      // instead of loading (server still enforces with 403). Fail-open only
+      // before the first bootstrap, when we cannot know yet.
+      try {
+        if (typeof window.qbankCanOpen === "function" && window.db.access && !window.qbankCanOpen(qbankId)) {
+          const meta = (cachedCategories || []).find(c => c.id === qbankId);
+          window.qbankRequestAccess(qbankId, (meta && meta.name) || qbankId);
+          return;
+        }
+      } catch (_) { /* fall through to the normal flow */ }
       // Commit the switch synchronously so nothing can render the old bank
       // while the dashboard loads (module state + persisted selection).
       window.db.selectedQBankId = qbankId;
@@ -564,77 +574,85 @@
       if (navStale(myNav)) return;
       qbanks = cachedCategories || [];
       qbanks = qbanks.filter(q => q.kind !== "exam_prep");
-      
+
+      // Access must be known BEFORE rendering, otherwise a null access
+      // fail-opens and every foreign bank looks selectable (e.g. Egypt for
+      // a Tunisia signup). Memoized call is free; force once when it yields
+      // nothing (stale memo after onboarding wiped window.db.access).
+      try {
+        await window.bootstrapAccess();
+        if (!(window.db && window.db.access)) await window.bootstrapAccess(true);
+      } catch (_) { /* fail-open only when the network itself fails */ }
+      if (navStale(myNav)) return;
+
       if (qbanks.length === 0) {
-        area.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">No QBanks available yet. Admins can create them in the Admin Panel.</div>';
+        area.innerHTML = '<div style="max-width:1000px; margin:0 auto; padding:32px 24px; font-family:Inter,-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;"><div style="border:1px solid #F1F5F9; border-radius:6px; background:#FAFAFA; color:#64748B; text-align:center; padding:16px 12px; font-size:12px;">No QBanks available yet. Admins can create them in the Admin Panel.</div></div>';
         if (window.hideGlobalLoader) window.hideGlobalLoader();
         return;
       }
-      
-      let html = `<div style="max-width:1000px; margin:0 auto; padding:32px 24px;">
-        <div style="margin-bottom:32px;">
-          <h2 style="margin:0; font-size:1.75rem; font-weight:700; color:var(--text-primary);">Select Question Bank</h2>
-          <p style="margin:6px 0 0 0; font-size:0.95rem; color:var(--text-muted);">Choose a bank to start practicing. You can switch anytime.</p>
+      if (typeof window.__epEnsureRowStyle === "function") window.__epEnsureRowStyle();
+
+      let html = `<div style="max-width:1000px; margin:0 auto; padding:32px 24px; font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <div style="margin-bottom:20px;">
+          <h2 style="margin:0; font-size:1.5rem; font-weight:700; color:#0F172A;">Select Question Bank</h2>
+          <p style="margin:6px 0 0 0; font-size:0.9rem; color:#64748B;">Choose a bank to start practicing. You can switch anytime.</p>
         </div>
-        <div style="display:flex; flex-direction:column; gap:16px;">`;
-      
-      const flagMap = { usa: "us", uk: "gb", australia: "au", canada: "ca", india: "in", europe: "eu", tunisia: "tn", algeria: "dz", egypt: "eg", morocco: "ma" };
-      const acc = window.db.access || null;
+        <div style="font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#64748B; margin:0 0 10px 0;">Available banks</div>
+        <div class="ep-card-rows" style="background:#fff; border:1px solid #E2E8F0; border-radius:6px; padding:6px 16px;">`;
+
+      const flagMap = { usa: "us", uk: "gb", australia: "au", canada: "ca", india: "in", europe: "eu", tunisia: "tn", algeria: "dz", egypt: "eg", morocco: "ma", saudi: "sa", global: null };
+      const countryLabels = { usa: "USA", uk: "UK", australia: "Australia", canada: "Canada", india: "India", europe: "Europe", tunisia: "Tunisia", algeria: "Algeria", egypt: "Egypt", morocco: "Morocco", saudi: "Saudi Arabia", global: "International" };
+      const escQ = (s) => window.escapeHtml ? window.escapeHtml(s) : s;
+      const acc = (window.db && window.db.access) || null;
       const isAllowedMain = (id) => !acc || acc.legacy || !acc.country || acc.grants.includes(id) || acc.mainIds.includes(id);
-      
+
       for (const q of qbanks) {
         const countryCode = flagMap[q.country];
-        const flagHtml = countryCode 
-           ? `<img src="https://flagcdn.com/${countryCode}.svg" alt="${countryCode}" style="width:32px; height:24px; border-radius:4px; object-fit:cover; box-shadow:0 2px 6px rgba(0,0,0,0.12);">`
-           : `<div style="font-size:1.5rem; line-height:1;">🌍</div>`;
-           
+        const flagHtml = countryCode
+           ? `<img src="https://flagcdn.com/${countryCode}.svg" alt="" style="width:28px; height:auto; border-radius:3px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">`
+           : `<span style="font-size:20px; line-height:1;">🌍</span>`;
+
         const cached = cachedQBanks[q.id];
         const qCount = cached ? (cached.questions || []).length : 0;
-        const countLabel = qCount > 0 ? `${qCount.toLocaleString()}` : '0';
-        const countSubLabel = qCount > 0 ? 'questions' : 'coming soon';
+        const subLabel = qCount > 0
+          ? `${escQ(countryLabels[q.country] || q.country || "")} &middot; ${qCount.toLocaleString()} questions`
+          : escQ(countryLabels[q.country] || q.country || "");
 
         const allowed = isAllowedMain(q.id);
-        const safeQName = (window.escapeHtml ? window.escapeHtml(q.name) : q.name).replace(/'/g, "\\'");
-        
+        const safeQName = String(q.name || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
         const clickAttr = allowed
           ? `onclick="window.selectQBank('${q.id}')"`
           : `onclick="window.qbankRequestAccess('${q.id}','${safeQName}')"`;
 
-        const cardOpacity = allowed ? '1' : '0.5';
-        const cardBorder = allowed ? 'rgba(255,255,255,0.06)' : 'rgba(148,163,184,0.15)';
-        const cardBg = allowed ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.01)';
-        
         const cta = allowed
-          ? `<button class="qbank-select-btn" style="width:100%; height:48px; padding:14px 20px; background:var(--accent-cyan); color:#fff; border:none; border-radius:10px; font-size:0.95rem; font-weight:600; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; justify-content:center; gap:8px;">
-               <span>Select Bank</span>
-               <i data-lucide="arrow-right" style="width:18px;height:18px;"></i>
+          ? `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.selectQBank('${q.id}')">
+               <span>Select</span>
+               <i data-lucide="arrow-right" style="width:14px;height:14px;"></i>
              </button>`
-          : `<button class="qbank-request-btn" style="width:100%; height:48px; padding:14px 20px; background:transparent; color:#64748b; border:2px solid #94a3b8; border-radius:10px; font-size:0.95rem; font-weight:600; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; justify-content:center; gap:8px;">
-               <i data-lucide="lock" style="width:16px;height:16px;"></i>
+          : `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${q.id}','${safeQName}')">
+               <i data-lucide="lock" style="width:14px;height:14px;"></i>
                <span>Request Access</span>
              </button>`;
 
         html += `
-          <div class="qbank-select-card" style="background:${cardBg}; border:1px solid ${cardBorder}; border-radius:16px; padding:20px 24px; cursor:pointer; transition:all 0.25s ease; display:flex; align-items:center; gap:20px; opacity:${cardOpacity};" ${clickAttr} onmouseover="this.style.transform='translateX(4px)'; this.style.borderColor='${allowed ? 'var(--accent-cyan)' : '#64748b'}';" onmouseout="this.style.transform='translateX(0)'; this.style.borderColor='${cardBorder}';">
-             <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:48px; height:48px; background:rgba(255,255,255,0.03); border-radius:12px; overflow:hidden;">
-               ${flagHtml}
+          <div class="qbank-select-card" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; cursor:pointer; opacity:${allowed ? "1" : "0.65"};" ${clickAttr} onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
+             <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:${allowed ? "#e6f2f2" : "#F1F5F9"}; border-radius:6px; overflow:hidden;">
+               ${allowed ? flagHtml : '<i data-lucide="lock" style="width:20px;height:20px;color:#94A3B8;"></i>'}
              </div>
-             <div style="flex:1; min-width:0;">
-               <div style="display:flex; align-items:center; gap:10px; margin-bottom:2px;">
-                 <h3 style="font-size:1.1rem; font-weight:600; margin:0; color:var(--text-primary);">${window.escapeHtml ? window.escapeHtml(q.name) : q.name}</h3>
-                 ${allowed ? '' : '<span style="font-size:0.7rem; color:#64748b; background:rgba(100,116,139,0.1); padding:3px 8px; border-radius:6px; font-weight:600;">LOCKED</span>'}
+             <div style="flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:2px;">
+               <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+                 <span style="font-size:15px; font-weight:700; color:#0F172A; line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escQ(q.name)}</span>
+                 ${allowed ? '' : '<span style="font-size:11px; font-weight:700; color:#C62828; background:#FBEAEA; padding:2px 9px; border-radius:999px; white-space:nowrap;">LOCKED</span>'}
                </div>
-               <div style="display:flex; align-items:center; gap:8px; margin-top:0;">
-                 <span style="font-size:1.25rem; font-weight:700; color:var(--accent-cyan);">${countLabel}</span>
-                 <span style="font-size:0.85rem; color:var(--text-muted);">${countSubLabel}</span>
-               </div>
+               <div style="font-size:12px; color:#64748B;">${subLabel}</div>
              </div>
-             <div style="flex-shrink:0; width:160px;">
+             <div style="flex-shrink:0;">
                ${cta}
              </div>
           </div>`;
       }
-      
+
       html += `</div></div>`;
       area.innerHTML = html;
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
