@@ -489,6 +489,44 @@ export const Route = createFileRoute("/api/qbank")({
             return json(buildAccessBundle({ country, grants }, allBanks), 200, cors);
           }
 
+          if (action === "my_access_requests") {
+            // Bank ids the caller already asked for and is waiting on.
+            // Lets the bank list render "Pending" instead of inviting a
+            // duplicate request. Billed reads = # pending docs (min 1).
+            try {
+              const qRes = await fetch(
+                `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents:runQuery`,
+                {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    structuredQuery: {
+                      from: [{ collectionId: "access_requests" }],
+                      where: {
+                        compositeFilter: { op: "AND", filters: [
+                          { fieldFilter: { field: { fieldPath: "uid" }, op: "EQUAL", value: { stringValue: uid } } },
+                          { fieldFilter: { field: { fieldPath: "status" }, op: "EQUAL", value: { stringValue: "pending" } } },
+                        ] },
+                      },
+                      select: { fields: [{ fieldPath: "qbankId" }] },
+                      limit: 50,
+                    },
+                  }),
+                }
+              );
+              if (!qRes.ok) return json({ pendingIds: [] }, 200, cors);
+              const qd = await qRes.json();
+              const pendingIds: string[] = [];
+              for (const el of (Array.isArray(qd) ? qd : [])) {
+                const bid = el?.document?.fields?.qbankId?.stringValue;
+                if (bid) pendingIds.push(String(bid));
+              }
+              return json({ pendingIds }, 200, cors);
+            } catch {
+              return json({ pendingIds: [] }, 200, cors);
+            }
+          }
+
 
           if (action === "get_question") {
             // Live lookup by human code / doc id / doc-id prefix against the
@@ -1173,6 +1211,38 @@ export const Route = createFileRoute("/api/qbank")({
               const pending = (qd || []).filter((x: any) => x.document).length;
               if (pending >= 10) return json({ error: "You already have many pending requests. Please wait." }, 429, cors);
             }
+
+            // Per-bank dedupe: one pending request per bank. A repeat tap
+            // succeeds idempotently so the client can flip to "Pending".
+            try {
+              const dupQ = await fetch(
+                `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents:runQuery`,
+                {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    structuredQuery: {
+                      from: [{ collectionId: "access_requests" }],
+                      where: {
+                        compositeFilter: { op: "AND", filters: [
+                          { fieldFilter: { field: { fieldPath: "uid" }, op: "EQUAL", value: { stringValue: uid } } },
+                          { fieldFilter: { field: { fieldPath: "qbankId" }, op: "EQUAL", value: { stringValue: qbankId } } },
+                          { fieldFilter: { field: { fieldPath: "status" }, op: "EQUAL", value: { stringValue: "pending" } } },
+                        ] },
+                      },
+                      select: { fields: [{ fieldPath: "__name__" }] },
+                      limit: 1,
+                    },
+                  }),
+                }
+              );
+              if (dupQ.ok) {
+                const dd = await dupQ.json();
+                if ((Array.isArray(dd) ? dd : []).some((x: any) => x && x.document)) {
+                  return json({ ok: true, alreadyRequested: true }, 200, cors);
+                }
+              }
+            } catch { /* fall through to creating the request */ }
 
             const now = new Date();
             const reqId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
