@@ -121,7 +121,9 @@
     } catch(e) { return null; }
   }
   window.getCachedQBank = getCachedQBank;
-
+  window.getQBankList = function () { return cachedCategories || []; }; // for library.js bank picker
+  window.idbKvGet = idbKvGet; // shared forever-cache for library.js (books, lists)
+  window.idbKvSet = idbKvSet;
   async function setCachedQBank(id, data) {
     try {
       const db = await openQBankDB();
@@ -2945,7 +2947,12 @@
       resultHeader.innerHTML = '<span style="color:#eab308;"><i data-lucide="check-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Partially correct</span>';
     } else {
       resultHeader.innerHTML = '<span style="color:#f43f5e;"><i data-lucide="x-circle" style="width:18px;height:18px;vertical-align:-3px;"></i> Incorrect</span>';
-      
+    }
+
+    // Auto-open the study concept panel (#qbank-study-content) on both
+    // incorrect AND partially-correct answers (partial = QCM subset with
+    // no wrong picks, e.g. picked A,B of correct A,B,C).
+    if (!isCorrect) {
       if (!document.getElementById("qbank-study-styles")) {
         const style = document.createElement("style");
         style.id = "qbank-study-styles";
@@ -2964,11 +2971,11 @@
         `;
         document.head.appendChild(style);
       }
-      
+
       const studyBtn = document.getElementById("qbank-study-btn");
       if (studyBtn) {
         studyBtn.classList.add("qbank-study-glow");
-        // Auto-open study concept when wrong, as requested
+        // Auto-open study concept when wrong or partially correct
         window.generateStudyConcept(q.id);
       }
     }
@@ -4308,7 +4315,12 @@
           qbankId: currentQBankId,
           questionId: questionId,
           studyConcept: parsedContent,
-          lang: conceptLang
+          lang: conceptLang,
+          // Already in memory — lets the server maintain the concepts
+          // digest with 0 extra reads.
+          code: (q.data && q.data.code) || "",
+          subject: (q.data && q.data.subject) || "",
+          chapter: (q.data && q.data.chapter) || ""
         })
       }).catch(e => console.error("Failed to save study concept async", e));
 
@@ -4979,9 +4991,20 @@
 
   window.__epState = { country: null };
 
+  // Shared clinical row polish: no trailing divider on the last row.
+  // Injected once (guarded by id) — matches the dashboard .clin-row look.
+  window.__epEnsureRowStyle = function() {
+      if (document.getElementById("ep-clin-style")) return;
+      const st = document.createElement("style");
+      st.id = "ep-clin-style";
+      st.textContent = ".ep-card-rows > div:last-child { border-bottom: none !important; }";
+      document.head.appendChild(st);
+  };
+
   window.epShowCountries = function() {
       const listEl = document.getElementById("exam-prep-content");
       if (!listEl || !window.__epBanks) return;
+      window.__epEnsureRowStyle();
       window.__epState.country = null;
 
       // group counts by country
@@ -4991,12 +5014,19 @@
           counts[c] = (counts[c] || 0) + 1;
       });
 
-      let out = '<div class="ep-countries" style="display:flex; flex-wrap:wrap; gap:20px;">';
+      if (Object.keys(counts).length === 0) {
+          listEl.innerHTML = '<div style="border:1px solid #F1F5F9; border-radius:6px; background:#FAFAFA; color:#64748B; text-align:center; padding:16px 12px; font-size:12px;">No exam-prep banks available yet.</div>';
+          return;
+      }
+      let out = '<div class="ep-countries" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; font-family:Inter,-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;">';
       Object.keys(counts).sort((a, b) => counts[b] - counts[a]).forEach(c => {
-          out += `<button onclick="window.epShowColleges('${c}')" style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:24px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:12px; width:160px; transition:all 0.2s; box-shadow:0 1px 3px rgba(0,0,0,0.05);" onmouseover="this.style.transform='translateY(-2px)'; this.style.borderColor='#007a7a'; this.style.boxShadow='0 4px 6px -1px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='#e2e8f0'; this.style.boxShadow='0 1px 3px rgba(0,0,0,0.05)';">
-              <span style="display:flex; justify-content:center; align-items:center;">${getEpFlagImg(c, 48)}</span>
-              <span style="font-weight:700; font-size:1.1rem; color:#111827;">${window.escapeHtml ? window.escapeHtml(EP_COUNTRY_LABELS[c] || c) : (EP_COUNTRY_LABELS[c] || c)}</span>
-              <span style="font-size:0.8rem; font-weight:600; color:#007a7a; background:#e6f2f2; padding:4px 12px; border-radius:999px;">${counts[c]} bank${counts[c] > 1 ? 's' : ''}</span>
+          out += `<button onclick="window.epShowColleges('${c}')" style="background:#fff; border:1px solid #E2E8F0; border-radius:6px; padding:14px 16px; cursor:pointer; display:flex; align-items:center; gap:12px; text-align:left; transition:all 0.2s;" onmouseover="this.style.borderColor='#007a7a'; this.style.background='#F8FAFC';" onmouseout="this.style.borderColor='#E2E8F0'; this.style.background='#fff';">
+              <span style="flex-shrink:0; display:flex; align-items:center;">${getEpFlagImg(c, 40)}</span>
+              <span style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px;">
+                  <span style="font-weight:700; font-size:15px; color:#0F172A; line-height:1.2;">${window.escapeHtml ? window.escapeHtml(EP_COUNTRY_LABELS[c] || c) : (EP_COUNTRY_LABELS[c] || c)}</span>
+                  <span><span style="font-size:11px; font-weight:700; color:#007a7a; background:#e6f2f2; padding:2px 9px; border-radius:999px; white-space:nowrap;">${counts[c]} bank${counts[c] > 1 ? 's' : ''}</span></span>
+              </span>
+              <i data-lucide="chevron-right" style="width:16px;height:16px;color:#94A3B8;flex-shrink:0;"></i>
           </button>`;
       });
       out += '</div>';
@@ -5007,6 +5037,7 @@
   window.epShowColleges = function(country) {
       const listEl = document.getElementById("exam-prep-content");
       if (!listEl || !window.__epBanks) return;
+      window.__epEnsureRowStyle();
       window.__epState.country = country;
 
       const banks = window.__epBanks.filter(q => (q.country || "global") === country);
@@ -5017,18 +5048,21 @@
           byCollege[col].push(q);
       });
 
-      let out = `<div style="max-width:1000px; margin:0 auto;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                  <a href="#" onclick="window.openExamPrepTab(); return false;" style="color:#6b7280; font-size:0.9rem; text-decoration:none; transition:color 0.2s;" onmouseover="this.style.color='#007a7a'" onmouseout="this.style.color='#6b7280'">Exam Prep</a>
-                  <i data-lucide="chevron-right" style="width:14px;height:14px;color:#9ca3af;"></i>
-                  <h3 style="display:flex; align-items:center; gap:8px; margin:0; font-size:1.1rem; font-weight:600; color:#111827;">${getEpFlagImg(country, 24)} ${window.escapeHtml ? window.escapeHtml(EP_COUNTRY_LABELS[country] || country) : country}</h3>
+      const escCol = (s) => window.escapeHtml ? window.escapeHtml(s) : s;
+      const jsEsc = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      let out = `<div style="max-width:1000px; margin:0 auto; font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+              <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+                  <a href="#" onclick="window.openExamPrepTab(); return false;" style="color:#64748B; font-size:12.5px; text-decoration:none; font-weight:600;" onmouseover="this.style.color='#007a7a'" onmouseout="this.style.color='#64748B'">Exam Prep</a>
+                  <i data-lucide="chevron-right" style="width:14px;height:14px;color:#94A3B8;flex-shrink:0;"></i>
+                  <h3 style="display:flex; align-items:center; gap:8px; margin:0; font-size:14px; font-weight:700; color:#0F172A;">${getEpFlagImg(country, 20)} ${escCol(EP_COUNTRY_LABELS[country] || country)}</h3>
               </div>
-              <button onclick="window.epShowCountries()" style="display:flex; align-items:center; gap:6px; padding:8px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; color:#6b7280; font-size:0.85rem; font-weight:500; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f8fafc'">
+              <button onclick="window.epShowCountries()" style="display:flex; align-items:center; gap:8px; padding:8px 16px; background:#F8FAFC; border:1px solid #E2E8F0; color:#0F172A; border-radius:999px; font-size:12.5px; font-weight:600; cursor:pointer; transition:all 0.2s; flex-shrink:0;" onmouseover="this.style.background='#E2E8F0'" onmouseout="this.style.background='#F8FAFC'">
                   <i data-lucide="arrow-left" style="width:14px;height:14px;"></i> All countries
               </button>
           </div>
-          <div style="display:flex; flex-direction:column; gap:12px;">`;
+          <div style="font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#64748B; margin:0 0 10px 0;">Colleges &middot; ${escCol(EP_COUNTRY_LABELS[country] || country)}</div>
+          <div class="ep-card-rows" style="background:#fff; border:1px solid #E2E8F0; border-radius:6px; padding:6px 16px;">`;
 
       if (Object.keys(byCollege).length === 1 && byCollege["General"]) {
           banks.forEach(q => {
@@ -5038,22 +5072,33 @@
           Object.keys(byCollege).sort().forEach(col => {
               const collegeBanks = byCollege[col];
               const firstBank = collegeBanks[0];
-              const safeName = (window.escapeHtml ? window.escapeHtml(firstBank.name) : firstBank.name).replace(/'/g, "\\'");
-              
+              // Raw values for JS args (display strings are HTML-escaped
+              // separately) so names with & / quotes still match filters.
+              const safeName = jsEsc(firstBank.name);
+              const safeCol = jsEsc(col);
+              const multi = collegeBanks.length > 1;
+              // Bank name leads, university sits underneath.
+              const subLabel = `${escCol(col)} &middot; ${collegeBanks.length} bank${collegeBanks.length > 1 ? 's' : ''}`;
+
+              const rowAction = firstBank.locked
+                  ? `window.qbankRequestAccess('${firstBank.id}', '${safeName}')`
+                  : (multi
+                      ? `window.epShowBanks('${country}', '${safeCol}')`
+                      : `window.startQBankSession('${firstBank.id}', '${safeName}')`);
               const actionBtn = firstBank.locked
-                  ? `<button style="background:#fff1f2; color:#e11d48; border:none; padding:8px 16px; border-radius:8px; font-weight:600; font-size:0.9rem; cursor:pointer;" onclick="event.stopPropagation(); window.qbankRequestAccess('${firstBank.id}', '${safeName}')">Request Access</button>`
-                  : `<button style="background:#007a7a; color:#fff; border:none; padding:8px 16px; border-radius:8px; font-weight:600; font-size:0.9rem; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background 0.2s;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${firstBank.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`;
+                  ? `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${firstBank.id}', '${safeName}')">Request Access</button>`
+                  : (multi
+                      ? `<button style="background:#F8FAFC; color:#0F172A; border:1px solid #E2E8F0; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#E2E8F0'" onmouseout="this.style.background='#F8FAFC'" onclick="event.stopPropagation(); window.epShowBanks('${country}', '${safeCol}')">View banks <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`
+                      : `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${firstBank.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`);
 
               out += `
-              <div onclick="${firstBank.locked ? `window.qbankRequestAccess('${firstBank.id}', '${safeName}')` : `window.startQBankSession('${firstBank.id}', '${safeName}')`}" style="background:transparent; border:none; border-bottom:1px solid #e2e8f0; padding:16px 0; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; justify-content:space-between; opacity:${firstBank.locked ? '0.6' : '1'};" onmouseover="this.style.transform='translateX(4px)'; this.style.borderBottomColor='#007a7a';" onmouseout="this.style.transform='translateX(0)'; this.style.borderBottomColor='#e2e8f0';">
-                  <div style="display:flex; align-items:center; gap:16px;">
-                      <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
-                          <i data-lucide="${firstBank.locked ? 'lock' : 'graduation-cap'}" style="width:20px;height:20px;color:${firstBank.locked ? '#9ca3af' : '#007a7a'};"></i>
-                      </div>
-                      <div style="display:flex; flex-direction:column; justify-content:center;">
-                          <h4 style="font-size:1rem; font-weight:600; margin:0; color:#111827;">${window.escapeHtml ? window.escapeHtml(col) : col}</h4>
-                          <div style="font-size:0.8rem; color:#6b7280; margin-top:4px;">${window.escapeHtml ? window.escapeHtml(firstBank.name) : firstBank.name} • ${collegeBanks.length} bank${collegeBanks.length > 1 ? 's' : ''}</div>
-                      </div>
+              <div onclick="${rowAction}" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; cursor:pointer; opacity:${firstBank.locked ? '0.65' : '1'};" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
+                  <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:${firstBank.locked ? '#F1F5F9' : '#e6f2f2'}; border-radius:6px;">
+                      <i data-lucide="${firstBank.locked ? 'lock' : (multi ? 'building-2' : 'graduation-cap')}" style="width:20px;height:20px;color:${firstBank.locked ? '#94A3B8' : '#007a7a'};"></i>
+                  </div>
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:2px;">
+                      <div style="font-size:15px; font-weight:700; color:#0F172A; line-height:1.3;">${escCol(firstBank.name)}</div>
+                      <div style="font-size:12px; color:#64748B;">${subLabel}</div>
                   </div>
                   ${actionBtn}
               </div>`;
@@ -5066,27 +5111,27 @@
   };
 
   window.__epBankRow = function(q) {
+      const esc = (s) => window.escapeHtml ? window.escapeHtml(s) : s;
       const cached = cachedQBanks[q.id];
       const qCount = cached && cached.questions ? cached.questions.length : 0;
       const countLabel = qCount > 0 ? `${qCount.toLocaleString()} questions` : "No questions yet";
-      const yearBadge = q.year ? `<span style="font-size:0.7rem; color:var(--text-muted); background:rgba(255,255,255,0.05); padding:2px 8px; border-radius:4px;">${window.escapeHtml ? window.escapeHtml(q.year) : q.year}</span>` : "";
-      const safeName = (window.escapeHtml ? window.escapeHtml(q.name) : q.name).replace(/'/g, "\\'");
+      const yearBadge = q.year ? ` <span style="font-size:11px; font-weight:700; color:#475569; background:#F1F5F9; padding:2px 9px; border-radius:999px; white-space:nowrap;">${esc(q.year)}</span>` : "";
+      // Raw name for JS args (rendered text is HTML-escaped separately).
+      const safeName = String(q.name || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
       const college = q.college || "General";
-      
+
       const actionBtn = q.locked
-          ? `<button style="background:#fff1f2; color:#e11d48; border:none; padding:8px 16px; border-radius:8px; font-weight:600; font-size:0.9rem; cursor:pointer;" onclick="event.stopPropagation(); window.qbankRequestAccess('${q.id}', '${safeName}')">Request Access</button>`
-          : `<button style="background:#007a7a; color:#fff; border:none; padding:8px 16px; border-radius:8px; font-weight:600; font-size:0.9rem; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background 0.2s;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${q.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`;
+          ? `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${q.id}', '${safeName}')">Request Access</button>`
+          : `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${q.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`;
 
       return `
-      <div onclick="${q.locked ? `window.qbankRequestAccess('${q.id}', '${safeName}')` : `window.startQBankSession('${q.id}', '${safeName}')`}" style="background:transparent; border:none; border-bottom:1px solid #e2e8f0; padding:16px 0; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; justify-content:space-between; opacity:${q.locked ? '0.6' : '1'};" onmouseover="this.style.transform='translateX(4px)'; this.style.borderBottomColor='#007a7a';" onmouseout="this.style.transform='translateX(0)'; this.style.borderBottomColor='#e2e8f0';">
-          <div style="display:flex; align-items:center; gap:16px;">
-              <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
-                  <i data-lucide="${q.locked ? 'lock' : 'graduation-cap'}" style="width:20px;height:20px;color:${q.locked ? '#9ca3af' : '#007a7a'};"></i>
-              </div>
-              <div style="display:flex; flex-direction:column; justify-content:center;">
-                  <h4 style="font-size:1rem; font-weight:600; margin:0; color:#111827;">${window.escapeHtml ? window.escapeHtml(college) : college}</h4>
-                  <div style="font-size:0.8rem; color:#6b7280; margin-top:4px;">${window.escapeHtml ? window.escapeHtml(q.name) : q.name} • ${countLabel}</div>
-              </div>
+      <div onclick="${q.locked ? `window.qbankRequestAccess('${q.id}', '${safeName}')` : `window.startQBankSession('${q.id}', '${safeName}')`}" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; cursor:pointer; opacity:${q.locked ? '0.65' : '1'};" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
+          <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:${q.locked ? '#F1F5F9' : '#e6f2f2'}; border-radius:6px;">
+              <i data-lucide="${q.locked ? 'lock' : 'graduation-cap'}" style="width:20px;height:20px;color:${q.locked ? '#94A3B8' : '#007a7a'};"></i>
+          </div>
+          <div style="flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:2px;">
+              <div style="font-size:15px; font-weight:700; color:#0F172A; line-height:1.3;">${esc(q.name)}${yearBadge}</div>
+              <div style="font-size:12px; color:#64748B;">${esc(college)} &middot; ${countLabel}</div>
           </div>
           ${actionBtn}
       </div>`;
@@ -5095,29 +5140,36 @@
   window.epShowBanks = function(country, college) {
       const listEl = document.getElementById("exam-prep-content");
       if (!listEl || !window.__epBanks) return;
+      window.__epEnsureRowStyle();
 
+      const esc = (s) => window.escapeHtml ? window.escapeHtml(s) : s;
       const banks = window.__epBanks.filter(q =>
           (q.country || "global") === country &&
           (q.college || "General") === college
       );
 
-      let out = `<div style="max-width:1000px; margin:0 auto;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                  <a href="#" onclick="window.openExamPrepTab(); return false;" style="color:#6b7280; font-size:0.9rem; text-decoration:none; transition:color 0.2s;" onmouseover="this.style.color='#007a7a'" onmouseout="this.style.color='#6b7280'">Exam Prep</a>
-                  <i data-lucide="chevron-right" style="width:14px;height:14px;color:#9ca3af;"></i>
-                  <button onclick="window.epShowColleges('${country}')" style="display:flex; align-items:center; gap:4px; padding:4px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; color:#6b7280; font-size:0.85rem; font-weight:500; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.borderColor='#9ca3af'" onmouseout="this.style.borderColor='#e2e8f0'">
-                      ${getEpFlagImg(country, 16)} ${window.escapeHtml ? window.escapeHtml(EP_COUNTRY_LABELS[country] || country) : country}
+      let out = `<div style="max-width:1000px; margin:0 auto; font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+              <div style="display:flex; align-items:center; gap:8px; min-width:0; flex-wrap:wrap;">
+                  <a href="#" onclick="window.openExamPrepTab(); return false;" style="color:#64748B; font-size:12.5px; text-decoration:none; font-weight:600;" onmouseover="this.style.color='#007a7a'" onmouseout="this.style.color='#64748B'">Exam Prep</a>
+                  <i data-lucide="chevron-right" style="width:14px;height:14px;color:#94A3B8;flex-shrink:0;"></i>
+                  <button onclick="window.epShowColleges('${country}')" style="display:flex; align-items:center; gap:6px; padding:4px 10px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:999px; color:#0F172A; font-size:12.5px; font-weight:600; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='#E2E8F0'" onmouseout="this.style.background='#F8FAFC'">
+                      ${getEpFlagImg(country, 16)} ${esc(EP_COUNTRY_LABELS[country] || country)}
                   </button>
-                  <i data-lucide="chevron-right" style="width:14px;height:14px;color:#9ca3af;"></i>
-                  <h3 style="margin:0; font-size:1.1rem; font-weight:600; color:#111827;">${window.escapeHtml ? window.escapeHtml(college) : college}</h3>
+                  <i data-lucide="chevron-right" style="width:14px;height:14px;color:#94A3B8;flex-shrink:0;"></i>
+                  <h3 style="margin:0; font-size:14px; font-weight:700; color:#0F172A;">${esc(college)}</h3>
               </div>
           </div>
-          <div style="display:flex; flex-direction:column; gap:12px;">`;
+          <div style="font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#64748B; margin:0 0 10px 0;">Banks &middot; ${esc(college)}</div>
+          <div class="ep-card-rows" style="background:#fff; border:1px solid #E2E8F0; border-radius:6px; padding:6px 16px;">`;
 
-      banks.forEach(q => {
-          out += window.__epBankRow(q);
-      });
+      if (banks.length === 0) {
+          out += `<div style="border:1px solid #F1F5F9; border-radius:6px; background:#FAFAFA; color:#64748B; text-align:center; padding:16px 12px; font-size:12px; margin:10px 0;">No banks in this college yet.</div>`;
+      } else {
+          banks.forEach(q => {
+              out += window.__epBankRow(q);
+          });
+      }
 
       out += `</div></div>`;
       listEl.innerHTML = out;
@@ -5136,12 +5188,15 @@
 
       if (window.setQBankNav) window.setQBankNav('exam-prep');
 
-      if (view) view.innerHTML = `<div style="max-width:1000px; margin:0 auto; width:100%; padding-bottom:40px;">
-          <h2 style="font-size:1.8rem; font-weight:700; margin-bottom:8px; color:#111827; display:flex; align-items:center; gap:12px;">
-              <i data-lucide="graduation-cap" style="width:30px;height:30px;color:#007a7a;"></i> Exam Prep
-          </h2>
-          <p style="margin:0 0 28px 0; font-size:1rem; color:#6b7280;">Browse past exams by country, then pick your college.</p>
-          <div id="exam-prep-content" style="color:#6b7280; text-align:center; padding:24px;">Loading…</div>
+      if (view) view.innerHTML = `<div style="max-width:1000px; margin:0 auto; width:100%; padding-bottom:40px; font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+              <div style="display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:#e6f2f2; border-radius:6px; flex-shrink:0;">
+                  <i data-lucide="graduation-cap" style="width:20px;height:20px;color:#007a7a;"></i>
+              </div>
+              <h2 style="font-size:1.5rem; font-weight:700; margin:0; color:#0F172A;">Exam Prep</h2>
+          </div>
+          <p style="margin:0 0 24px 0; font-size:0.9rem; color:#64748B;">Browse past exams by country, then pick your college.</p>
+          <div id="exam-prep-content" style="color:#64748B; font-size:12px;">Loading…</div>
       </div>`;
       if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
 

@@ -45,7 +45,25 @@
       } finally {
         whoamiPromise = null;
       }
-    })();
+  window.adminLibraryBackfill = async function (btn) {
+    if (!window.__adminLibraryBank) return;
+    if (!confirm("Scan every question once to seed the concepts digest? After this, exports cost 1 read.")) return;
+    const orig = btn ? btn.innerHTML : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Backfilling…"; }
+    try {
+      const res = await api("/api/admin", {
+        method: "POST",
+        body: JSON.stringify({ action: "backfill_concepts_digest", qbankId: window.__adminLibraryBank }),
+      });
+      alert(`Digest seeded: ${res.withConcepts} concepts from ${res.total} questions. Exports are now 1 read.`);
+    } catch (e) {
+      alert("Backfill failed: " + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+    }
+  };
+
+})();
     return whoamiPromise;
   };
 
@@ -105,6 +123,7 @@
     if (tab === "notifications") loadAdminNotifications();
     if (tab === "stats") loadAdminStats();
     if (tab === "qbank") loadAdminQBank();
+    if (tab === "library") loadAdminLibrary();
     if (tab === "reports") loadAdminReports();
     if (tab === "support") loadAdminSupport();
     if (tab === "peerstats") loadAdminPeerStats();
@@ -3265,6 +3284,168 @@ Explication générale: Leçon clé: Le SCA doit toujours être suspecté en pre
       loadAdminPeerStats(); // Reload to show updated value
     } catch (e) {
       alert("Failed to save: " + e.message);
+    }
+  };
+
+  // ---------- MEDICAL LIBRARY (per-bank books) ----------
+  // Each bank owns its book collection: qbanks/{bankId}/books/{bookId}.
+  // Workflow: Export concepts (.txt) -> author book JSON -> Import book.
+  window.__adminLibraryBank = null;
+
+  async function loadAdminLibrary() {
+    const c = document.getElementById("admin-library-content");
+    if (!c) return;
+    c.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">Loading banks…</div>';
+    try {
+      const res = await api("/api/admin?action=list_qbanks", { method: "GET" });
+      const banks = (res.qbanks || []).filter((q) => q.kind !== "exam_prep");
+      if (!banks.length) {
+        c.innerHTML = '<div style="color:var(--text-muted);">No QBanks yet — create one in the QBank tab first.</div>';
+        return;
+      }
+      if (!window.__adminLibraryBank || !banks.some((b) => b.id === window.__adminLibraryBank)) {
+        window.__adminLibraryBank = banks[0].id;
+      }
+      const opts = banks.map((b) => `<option value="${escapeHtml(b.id)}" ${b.id === window.__adminLibraryBank ? "selected" : ""}>${escapeHtml(b.name)}</option>`).join("");
+      c.innerHTML = `
+        <h3 style="color:var(--text-primary); margin:0 0 4px 0;">Medical Library</h3>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin:0 0 16px 0;">Each bank has its own book collection. Export study concepts to author books, then import them as JSON.</p>
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+          <select id="admin-library-bank" class="login-input" style="min-width:220px;" onchange="window.adminLibrarySetBank(this.value)">${opts}</select>
+          <button class="btn-dark-pill" style="color:#34d399;" onclick="window.adminLibraryExportConcepts(this)">Export study concepts (.txt)</button>
+          <button class="btn-dark-pill" style="color:#fcd34d;" onclick="window.adminLibraryBackfill(this)" title="One-time scan: seeds the digest from all questions so exports stay instant">Backfill digest</button>
+        </div>
+        <div id="admin-library-books" style="display:flex; flex-direction:column; gap:10px; margin-bottom:20px;"></div>
+        <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:16px;">
+          <div style="font-weight:700; color:var(--text-primary); margin-bottom:10px;">Import book (JSON)</div>
+          <input type="file" id="admin-library-file" accept=".json,application/json" class="login-input" style="margin-bottom:10px;">
+          <textarea id="admin-library-text" class="login-input" rows="6" style="width:100%; margin-bottom:10px;" placeholder='Paste one book object or an array of books…'></textarea>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input type="text" id="admin-library-title" class="login-input" placeholder="Title override (optional)" style="flex:1;">
+            <button class="btn-action primary" onclick="window.adminLibraryImport(this)">Import book</button>
+          </div>
+          <div id="admin-library-status" style="font-size:0.85rem; margin-top:10px; min-height:18px;"></div>
+          <details style="margin-top:10px; font-size:0.82rem; color:var(--text-muted);">
+            <summary style="cursor:pointer; color:var(--accent-cyan);">JSON format</summary>
+            <pre style="white-space:pre-wrap; background:rgba(0,0,0,0.25); padding:10px; border-radius:8px; margin-top:8px;">{
+  "title": "Cardiology Library",
+  "subject": "Cardiology",
+  "units": [
+    { "title": "Unit 1: Fundamentals",
+      "chapters": [
+        { "title": "Chapter 1: Heart Failure",
+          "lessons": [
+            { "title": "1.1 Definition", "body": "Markdown lesson text…" }
+          ] } ] } ]
+}</pre>
+            <div style="margin-top:6px;">Shorthands: top-level <b>chapters</b> wraps into one unit; top-level <b>lessons</b> wraps into one unit + chapter. Re-importing the same title overwrites that book. Max ~900KB per book.</div>
+          </details>
+        </div>`;
+      if (window.lucide && window.lucide.createIcons) { try { window.lucide.createIcons(); } catch (_) {} }
+      await window.adminLibraryRefreshBooks();
+    } catch (e) {
+      c.innerHTML = `<div style="color:var(--danger);">Failed to load banks: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  window.adminLibrarySetBank = async function (id) {
+    window.__adminLibraryBank = id;
+    await window.adminLibraryRefreshBooks();
+  };
+
+  window.adminLibraryRefreshBooks = async function () {
+    const box = document.getElementById("admin-library-books");
+    if (!box || !window.__adminLibraryBank) return;
+    box.innerHTML = '<div style="color:var(--text-muted);">Loading books…</div>';
+    try {
+      const res = await api("/api/admin", {
+        method: "POST",
+        body: JSON.stringify({ action: "list_library_books", qbankId: window.__adminLibraryBank }),
+      });
+      const books = res.books || [];
+      if (!books.length) {
+        box.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem;">No books in this bank yet — import one below.</div>';
+        return;
+      }
+      box.innerHTML = books.map((b) => `
+        <div style="padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:8px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div>
+            <div style="font-weight:600; color:var(--text-primary);">${escapeHtml(b.title)}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">${b.lessonCount || 0} lessons${b.subject ? ` · ${escapeHtml(b.subject)}` : ""}</div>
+          </div>
+          <button class="btn-dark-pill" style="color:var(--danger);" onclick="window.adminLibraryDeleteBook('${escapeHtml(b.id)}')">Delete</button>
+        </div>`).join("");
+    } catch (e) {
+      box.innerHTML = `<div style="color:var(--danger);">Failed to load books: ${escapeHtml(e.message)}</div>`;
+    }
+  };
+
+  window.adminLibraryImport = async function (btn) {
+    const status = document.getElementById("admin-library-status");
+    const say = (t, ok) => { if (status) { status.textContent = t; status.style.color = ok ? "#34d399" : "#f43f5e"; } };
+    if (!window.__adminLibraryBank) { say("Pick a bank first.", false); return; }
+    let rawText = "";
+    const ta = document.getElementById("admin-library-text");
+    const fi = document.getElementById("admin-library-file");
+    try {
+      if (fi && fi.files && fi.files[0]) rawText = await fi.files[0].text();
+      else if (ta) rawText = ta.value;
+    } catch (e) { say("Could not read file: " + e.message, false); return; }
+    if (!rawText.trim()) { say("Paste JSON or choose a .json file first.", false); return; }
+    const title = (document.getElementById("admin-library-title") || {}).value || "";
+    if (btn) { btn.disabled = true; btn.textContent = "Importing…"; }
+    say("Importing…", true);
+    try {
+      const res = await api("/api/admin", {
+        method: "POST",
+        body: JSON.stringify({ action: "import_library_json", qbankId: window.__adminLibraryBank, rawText, bookTitle: title }),
+      });
+      const names = (res.books || []).map((b) => `${b.title} (${b.lessons} lessons)`).join(", ");
+      say(`Imported ${res.imported} book(s): ${names}`, true);
+      if (ta) ta.value = "";
+      if (fi) fi.value = "";
+      await window.adminLibraryRefreshBooks();
+    } catch (e) {
+      say("Import failed: " + e.message, false);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Import book"; }
+    }
+  };
+
+  window.adminLibraryDeleteBook = async function (id) {
+    if (!confirm("Delete this book? Students will lose access to it.")) return;
+    try {
+      await api("/api/admin", {
+        method: "POST",
+        body: JSON.stringify({ action: "delete_library_book", qbankId: window.__adminLibraryBank, bookId: id }),
+      });
+      await window.adminLibraryRefreshBooks();
+    } catch (e) {
+      alert("Delete failed: " + e.message);
+    }
+  };
+
+  window.adminLibraryExportConcepts = async function (btn) {
+    if (!window.__adminLibraryBank) return;
+    const orig = btn ? btn.innerHTML : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Exporting…"; }
+    try {
+      const res = await api("/api/admin", {
+        method: "POST",
+        body: JSON.stringify({ action: "export_study_concepts", qbankId: window.__adminLibraryBank }),
+      });
+      const blob = new Blob([res.text || ""], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = res.filename || "concepts.txt";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      alert(`Exported ${res.withConcepts} concepts.${res.backfilledAt ? ` Digest backfilled: ${res.backfilledAt}.` : " Digest never backfilled — run Backfill digest for full coverage of older concepts."} Served from digest — 1 read.`);
+    } catch (e) {
+      alert("Export failed: " + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = orig; }
     }
   };
 

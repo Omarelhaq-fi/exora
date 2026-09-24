@@ -183,7 +183,8 @@ window.hideAllMainViews = function() {
         "flashcards-explorer-view",
         "performance-view",
         "planner-view",
-        "resources-view"
+        "resources-view",
+        "library-view"
     ];
     views.forEach(id => {
         const el = document.getElementById(id);

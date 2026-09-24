@@ -279,7 +279,12 @@
             <i class="fa-regular fa-file-lines text-[16px] w-6 text-center mr-3"></i>
             <span class="font-sans text-[14px]">Resources</span>
         </a>
-        
+        <!-- Library hidden for now
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="library" href="#" onclick="window.openLibraryTab && window.openLibraryTab();">
+            <i class="fa-solid fa-book-open text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Library</span>
+        </a>
+        -->
         <div class="my-4 border-t border-gray-200 mx-2"></div>
 
         <a id="admin-panel-btn" style="display: none;" class="items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" href="#" onclick="window.openAdminPanel && window.openAdminPanel();">
@@ -340,6 +345,7 @@
     <div id="flashcards-explorer-content" class="w-full max-w-[1200px] mx-auto"></div>
   </div>
   <div id="resources-view" style="display:none; flex:1; width:100%; padding:24px; overflow-y:auto;"></div>
+  <div id="library-view" style="display:none; flex:1; width:100%; padding:24px; overflow-y:auto;"></div>
   <div id="performance-view" style="display:none; flex:1; width:100%; padding:24px;">
     <div id="performance-content" class="w-full max-w-[1200px] mx-auto"></div>
   </div>
@@ -639,6 +645,7 @@
                     <button class="admin-tab" data-tab="reports" onclick="window.switchAdminTab('reports')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="flag" style="width:14px;height:14px;vertical-align:-2px;"></i> Reports</button>
                     <button class="admin-tab" data-tab="support" onclick="window.switchAdminTab('support')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="life-buoy" style="width:14px;height:14px;vertical-align:-2px;"></i> Support</button>
                     <button class="admin-tab" data-tab="peerstats" onclick="window.switchAdminTab('peerstats')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="bar-chart-3" style="width:14px;height:14px;vertical-align:-2px;"></i> Peer Stats</button>
+                    <button class="admin-tab" data-tab="library" onclick="window.switchAdminTab('library')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="book-open" style="width:14px;height:14px;vertical-align:-2px;"></i> Library</button>
                 </div>
                 <div style="flex:1; overflow-y:auto; padding:22px; min-height:0;">
                     <div id="admin-panel-keys" class="admin-tab-panel">
@@ -661,6 +668,9 @@
                     </div>
                     <div id="admin-panel-peerstats" class="admin-tab-panel" style="display:none;">
                         <div id="admin-peerstats-content"></div>
+                    </div>
+                    <div id="admin-panel-library" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-library-content"></div>
                     </div>
                     <div id="admin-panel-stats" class="admin-tab-panel" style="display:none;">
                         <div id="admin-stats-content"></div>
@@ -928,6 +938,7 @@
     <script src="js/study-party.js?v=2"></script>
     <script src="js/qbank-party.js?v=1"></script>
     <script src="js/qbank.js?v=25"></script>
+    <script src="js/library.js?v=1"></script>
 
     <script src="js/whiteboard.js"></script>
     <script src="js/mindmap.js"></script>
