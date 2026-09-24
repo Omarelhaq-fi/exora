@@ -1322,15 +1322,20 @@
                   ? `<span class="clin-badge clin-badge-warn">${subjScore}%</span>`
                   : `<span class="clin-badge clin-badge-bad">${subjScore}%</span>`);
           continueCardHtml = `
-          <div class="clin-card" style="display:flex; flex-direction:column;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                  <h2 class="clin-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a;"></i>Continue studying</h2>
+          <div class="clin-card clin-glass" style="display:flex; flex-direction:column; position:relative; overflow:hidden;">
+              <div style="position:absolute; top:25%; left:-5%; width:110%; height:75%; opacity:0.04; pointer-events:none; z-index:0;">
+                 <svg viewBox="0 0 500 100" preserveAspectRatio="none" style="width:100%; height:100%;">
+                     <path d="M0 50 L100 50 L120 20 L140 80 L160 50 L180 50 L200 50 L210 30 L230 70 L250 50 L500 50" fill="none" stroke="#007a7a" stroke-width="4"/>
+                 </svg>
+              </div>
+              <div style="position:relative; z-index:1; display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <h2 class="clin-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a;"></i>Continue studying <span class="micro-tag live">Live</span></h2>
                   <a href="#" onclick="window.openExamPrepTab && window.openExamPrepTab(); return false;" style="color:#64748B; font-size:11.5px; text-decoration:none; font-weight:600;">Change</a>
               </div>
-              <div style="font-weight:700; color:#0F172A; font-size:16px; margin-bottom:4px;">${escLastSubject}</div>
-              <div class="clin-muted" style="font-size:12px; margin-bottom:2px;">${subStat ? subStat.answered : 0} of ${subStat ? subStat.total : 0} answered &middot; last score ${scoreBadge}</div>
-              <div class="clin-muted" style="font-size:12px; margin-bottom:12px;">${lastSubject === "All Subjects" ? "Mixed review block" : "Priority topic review"} &middot; ~15 Qs &middot; ~12 min</div>
-              <div style="margin-top:auto;">
+              <div style="position:relative; z-index:1; font-weight:700; color:#0F172A; font-size:16px; margin-bottom:4px;">${escLastSubject}</div>
+              <div class="clin-muted" style="position:relative; z-index:1; font-size:12px; margin-bottom:2px;">${subStat ? subStat.answered : 0} of ${subStat ? subStat.total : 0} answered &middot; last score ${scoreBadge}</div>
+              <div class="clin-muted" style="position:relative; z-index:1; font-size:12px; margin-bottom:12px;">${lastSubject === "All Subjects" ? "Mixed review block" : "Priority topic review"} &middot; ~15 Qs &middot; ~12 min</div>
+              <div style="margin-top:auto; position:relative; z-index:1;">
                   <button class="clin-btn-primary" onclick="window.qbankContinueLast()">
                       Continue session <i class="fa-solid fa-arrow-right" style="font-size:12px;"></i>
                   </button>
@@ -1339,8 +1344,8 @@
           `;
       } else {
           continueCardHtml = `
-          <div class="clin-card" style="display:flex; flex-direction:column;">
-              <h2 class="clin-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a;"></i>Continue studying</h2>
+          <div class="clin-card clin-glass" style="display:flex; flex-direction:column;">
+              <h2 class="clin-card-title"><i class="fa-solid fa-book-open" style="color:#007a7a;"></i>Continue studying <span class="micro-tag live">Ready</span></h2>
               <div class="clin-muted" style="font-size:12.5px; margin:2px 0 12px;">Ready to dive in? Start a block to track progress.</div>
               <div style="margin-top:auto;">
                   <button class="clin-btn-primary" onclick="window.openExamPrepTab && window.openExamPrepTab()">
@@ -1390,20 +1395,41 @@
         }).join(' ');
         const lastX = (P + (_trendPts.length - 1) * stepX).toFixed(1);
         _sparkHtml = `
-          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;">
-            <polygon points="${P},${H} ${pts} ${lastX},${H}" fill="rgba(0,122,122,0.10)"></polygon>
-            <polyline points="${pts}" fill="none" stroke="#007a7a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block; overflow:visible;">
+            <defs>
+              <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#007a7a" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#007a7a" stop-opacity="0"/>
+              </linearGradient>
+              <filter id="neonGlow">
+                <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+                <feMerge>
+                  <feMergeNode in="coloredBlur"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+            </defs>
+            <polygon points="${P},${H} ${pts} ${lastX},${H}" fill="url(#trendGrad)"></polygon>
+            <polyline points="${pts}" fill="none" stroke="#007a7a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#neonGlow)"></polyline>
           </svg>
           <div class="clin-muted" style="font-size:11px; margin-top:4px;">Recent trend &middot; last ${_trendPts.length} blocks</div>`;
       } else {
-        _sparkHtml = `<div class="clin-empty">Trend appears after a few practice blocks.</div>`;
+        _sparkHtml = `
+        <div class="clin-empty" style="position:relative; overflow:hidden; padding:12px 10px;">
+            <div style="position:absolute; bottom:-4px; left:0; width:100%; opacity:0.15; pointer-events:none; mask-image: linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,1) 100%); -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,1) 100%);">
+                <svg width="100%" height="40" preserveAspectRatio="none" viewBox="0 0 100 40">
+                    <path d="M0 40 Q25 15 50 30 T100 5" fill="none" stroke="#007a7a" stroke-width="2" stroke-dasharray="4 4"/>
+                </svg>
+            </div>
+            <span style="position:relative; z-index:1;">Trend appears after a few practice blocks.</span>
+        </div>`;
       }
 
       const _scoreBadge = globalScore >= 70
-          ? `<span class="clin-badge clin-badge-good">High performance</span>`
+          ? `<div class="clin-status-bar good"><i class="fa-solid fa-shield-check"></i> High performance</div>`
           : (globalScore >= 50
-              ? `<span class="clin-badge clin-badge-warn">Developing</span>`
-              : `<span class="clin-badge clin-badge-bad">Remediation needed</span>`);
+              ? `<div class="clin-status-bar warn"><i class="fa-solid fa-shield-halved"></i> Developing</div>`
+              : `<div class="clin-status-bar bad"><i class="fa-solid fa-shield-cat"></i> Remediation needed</div>`);
       const _weakRow = topWeakPerf
           ? `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0;">
                  <span style="font-size:12.5px; color:#334155; font-weight:600;">${escWeak}</span>
@@ -1420,24 +1446,35 @@
       // progress) — that looks broken. Require two distinct scored areas.
       const _sameTopic = topWeakPerf && topStrong && topWeakPerf.name === topStrong.name;
       const _diagBody = totalAnswered <= 0
-          ? `<div class="clin-empty">Diagnostics populate after you answer questions.</div>`
+          ? `<div class="clin-empty"><div style="margin-bottom:6px; opacity:0.4;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#A0AEC0" stroke-width="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>Diagnostics populate after you answer questions.</div>`
           : (_sameTopic || !topWeakPerf || !topStrong
-              ? `<div class="clin-empty">More data needed to calculate strengths.</div>`
+              ? `<div class="clin-empty"><div style="margin-bottom:6px; opacity:0.4;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#A0AEC0" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></div>More data needed to calculate strengths.</div>`
               : `${_weakRow}${_strongRow}`);
 
       let performanceCardHtml = `
-      <div class="clin-card">
+      <div class="clin-card clin-glass">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <h2 class="clin-card-title" style="margin:0;"><i class="fa-solid fa-chart-column" style="color:#007a7a;"></i>Performance &amp; diagnostics</h2>
+              <h2 class="clin-card-title" style="margin:0;"><i class="fa-solid fa-chart-column" style="color:#007a7a;"></i>Performance &amp; diagnostics <span class="micro-tag global">Global</span></h2>
               <a href="#" onclick="window.openPerformance && window.openPerformance(); return false;" style="color:#007a7a; font-size:11.5px; text-decoration:none; font-weight:600;">Full analytics</a>
           </div>
           <div class="clin-analytics">
               <div style="display:flex; align-items:center; gap:16px;">
                   <div style="position:relative; width:104px; height:104px; flex-shrink:0;">
                       <svg width="104" height="104" viewBox="0 0 120 120" style="display:block;">
-                          <circle cx="60" cy="60" r="54" fill="none" stroke="#E2E8F0" stroke-width="12"></circle>
+                          <defs>
+                              <filter id="ringInnerShadow">
+                                  <feOffset dx="0" dy="3"/>
+                                  <feGaussianBlur stdDeviation="3" result="offset-blur"/>
+                                  <feComposite operator="out" in="SourceGraphic" in2="offset-blur" result="inverse"/>
+                                  <feFlood flood-color="black" flood-opacity="0.08" result="color"/>
+                                  <feComposite operator="in" in="color" in2="inverse" result="shadow"/>
+                                  <feComposite operator="over" in="shadow" in2="SourceGraphic"/>
+                              </filter>
+                          </defs>
+                          <circle cx="60" cy="60" r="54" fill="none" stroke="#E2E8F0" stroke-width="12" filter="url(#ringInnerShadow)"></circle>
+                          <circle cx="60" cy="60" r="42" fill="none" stroke="#F1F5F9" stroke-width="4"></circle>
                           <circle cx="60" cy="60" r="54" fill="none" stroke="${_donutColor}" stroke-width="12" stroke-linecap="round"
-                              stroke-dasharray="${_C.toFixed(1)}" stroke-dashoffset="${_off}" transform="rotate(-90 60 60)"></circle>
+                              stroke-dasharray="${_C.toFixed(1)}" stroke-dashoffset="${_off}" transform="rotate(-90 60 60)" style="filter: drop-shadow(0 2px 4px ${_donutColor}40)"></circle>
                           <text x="60" y="80" text-anchor="middle" font-size="9" font-weight="700" letter-spacing="1.5" fill="#64748B" font-family="Inter,-apple-system,'Segoe UI',Roboto,sans-serif">AVG SCORE</text>
                       </svg>
                       <div class="donut-text-overlay" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none; text-align:center;">
@@ -1469,8 +1506,8 @@
           { label: 'Incorrect pool', val: totalIncorrect, pct: Math.round((totalIncorrect / totalQuestions) * 100), color: '#EF4444' }
       ] : [];
       let focusCardHtml = `
-      <div class="clin-card" style="display:flex; flex-direction:column;">
-          <h2 class="clin-card-title"><i class="fa-solid fa-layer-group" style="color:#007a7a;"></i>Question pool</h2>
+      <div class="clin-card clin-glass" style="display:flex; flex-direction:column;">
+          <h2 class="clin-card-title"><i class="fa-solid fa-layer-group" style="color:#007a7a;"></i>Question pool <span class="micro-tag data">Data</span></h2>
           ${totalQuestions > 0 ? `
           <div style="display:block; width:100%; margin-top:2px;">
               ${_poolRows.map((r, i) => `
@@ -1479,7 +1516,7 @@
                       <span style="font-weight:500; color:#475569; margin:0; padding:0;">${r.label}</span>
                       <span style="font-weight:600; color:#0F172A; margin:0; padding:0;">${r.val.toLocaleString()} (${r.pct}%)</span>
                   </div>
-                  <div class="clin-pool-track" style="display:block; width:100%; height:6px; background-color:#E2E8F0; border-radius:999px; overflow:hidden; margin:0; padding:0;"><div class="clin-pool-fill" style="display:block; height:100%; width:${r.pct}%; background-color:${r.color}; border-radius:999px; margin:0; padding:0;"></div></div>
+                  <div class="clin-pool-track" style="display:block; width:100%; height:6px; background-color:#E2E8F0; border-radius:999px; overflow:hidden; margin:0; padding:0;"><div class="clin-pool-fill" style="display:block; height:100%; width:${r.pct}%; background-color:${r.color}; border-radius:999px; margin:0; padding:0; box-shadow:0 0 6px ${r.color}66;"></div></div>
               </div>`).join('')}
           </div>
           <div class="clin-muted" style="font-size:11.5px; margin-top:16px;">${totalQuestions.toLocaleString()} questions in bank</div>
@@ -1488,24 +1525,22 @@
       `;
 
       // Quick Actions (compact clinical)
-      const _qa = (fn, icon, title, sub) => `
-          <div onclick="${fn}" style="background:#fff; border:1px solid #E2E8F0; border-radius:6px; padding:10px 12px; cursor:pointer; display:flex; align-items:center; gap:10px;" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='#fff'">
-              <div style="background:#e6f2f2; width:30px; height:30px; border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                  <i class="${icon}" style="color:#007a7a; font-size:14px;"></i>
+      const _qa = (fn, icon, title, sub, colorClass) => `
+          <div onclick="${fn}" class="qa-tile-3d ${colorClass}" onmouseover="this.classList.add('hover')" onmouseout="this.classList.remove('hover')">
+              <div class="qa-icon-container">
+                  <i class="${icon}"></i>
               </div>
-              <div style="flex:1; min-width:0;">
-                  <div style="font-weight:700; color:#0F172A; font-size:12.5px;">${title}</div>
-                  <div class="clin-muted" style="font-size:11px;">${sub}</div>
+              <div class="qa-content">
+                  <div class="qa-title">${title}</div>
+                  <div class="qa-sub">${sub}</div>
               </div>
-              <i class="fa-solid fa-chevron-right" style="color:#94A3B8; font-size:11px;"></i>
           </div>`;
       let quickActionsHtml = `
-      <div class="clin-card">
-          <h2 class="clin-card-title"><i class="fa-solid fa-bolt" style="color:#007a7a;"></i>Quick actions</h2>
-          <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
-              ${_qa('window.openExamPrepTab && window.openExamPrepTab()', 'fa-solid fa-book-open', 'New session', 'Customize practice')}
-              ${_qa('window.openFlashcardsExplorer && window.openFlashcardsExplorer()', 'fa-solid fa-layer-group', 'Flashcards', 'Reinforce learning')}
-              ${_qa('window.openPlanner && window.openPlanner()', 'fa-regular fa-calendar', 'Study plan', 'Stay on track')}
+      <div class="clin-card clin-glass" style="background:transparent; border:none; box-shadow:none; padding:0;">
+          <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px;">
+              ${_qa('window.openExamPrepTab && window.openExamPrepTab()', 'fa-solid fa-stethoscope', 'New session', 'Customize practice', 'qa-cyan')}
+              ${_qa('window.openFlashcardsExplorer && window.openFlashcardsExplorer()', 'fa-solid fa-layer-group', 'Flashcards', 'Reinforce learning', 'qa-purple')}
+              ${_qa('window.openPlanner && window.openPlanner()', 'fa-solid fa-calendar-check', 'Study plan', 'Stay on track', 'qa-blue')}
           </div>
       </div>
       `;
@@ -1521,10 +1556,10 @@
                   ? `<span class="clin-badge clin-badge-warn">${w.score}%</span>`
                   : `<span class="clin-badge clin-badge-bad">${w.score}%</span>`;
               listHtml += `
-              <div class="clin-row" onclick="window.startQBankSession('${activeQBankId}', '${safeBankName}', '${safeNameClick}')" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
+              <div class="clin-row clin-row-hover" onclick="window.startQBankSession('${activeQBankId}', '${safeBankName}', '${safeNameClick}')">
                   <div style="flex:1; min-width:0;">
                       <div style="font-size:12.5px; font-weight:600; color:#0F172A; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${safeName}</div>
-                      <div class="clin-bar-track" style="margin-top:5px;"><div style="height:100%; width:${Math.max(0, Math.min(100, w.score))}%; background:#EF4444; border-radius:3px;"></div></div>
+                      <div class="clin-bar-track" style="margin-top:5px;"><div style="height:100%; width:${Math.max(0, Math.min(100, w.score))}%; background: linear-gradient(90deg, #f87171, #ef4444); border-radius:3px; box-shadow: 0 0 6px rgba(239,68,68,0.5);"></div></div>
                   </div>
                   ${wBadge}
                   <i class="fa-solid fa-chevron-right" style="font-size:11px; color:#94A3B8;"></i>
@@ -1533,9 +1568,9 @@
           });
 
           weakestAreasHtml = `
-          <div class="clin-card" style="display:flex; flex-direction:column;">
+          <div class="clin-card clin-glass" style="display:flex; flex-direction:column;">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                  <h2 class="clin-card-title" style="margin:0;"><i class="fa-solid fa-bullseye"></i>Priority review</h2>
+                  <h2 class="clin-card-title" style="margin:0;"><i class="fa-solid fa-bullseye" style="color:#007a7a;"></i>Priority review <span class="micro-tag focus">Focus</span></h2>
                   <a href="#" onclick="window.openPerformance && window.openPerformance(); return false;" style="color:#007a7a; font-size:11.5px; text-decoration:none; font-weight:600;">View all</a>
               </div>
               <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
@@ -1545,8 +1580,8 @@
           `;
       } else {
           weakestAreasHtml = `
-          <div class="clin-card" style="display:flex; flex-direction:column;">
-              <h2 class="clin-card-title"><i class="fa-solid fa-bullseye"></i>Priority review</h2>
+          <div class="clin-card clin-glass" style="display:flex; flex-direction:column;">
+              <h2 class="clin-card-title"><i class="fa-solid fa-bullseye" style="color:#007a7a;"></i>Priority review <span class="micro-tag focus">Focus</span></h2>
               <div class="clin-empty">No weak areas yet — answer more questions to reveal priority targets.</div>
           </div>
           `;
@@ -1576,6 +1611,8 @@
         .clin-wrap {
             font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #F8FAFC;
+            background-image: radial-gradient(rgba(0,122,122, 0.08) 1px, transparent 1px);
+            background-size: 24px 24px;
             animation: clin-fade-in 0.4s ease-out;
             width: 100%;
             box-sizing: border-box;
@@ -1615,7 +1652,7 @@
             margin: 0 0 10px 0;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 12px;
         }
         .clin-card-title i {
             font-size: 12px;
@@ -1690,6 +1727,94 @@
             border-radius: 4px;
             cursor: pointer;
         }
+        .clin-glass {
+            background: rgba(255, 255, 255, 0.9) !important;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.8) !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02), inset 0 0 0 1px rgba(255, 255, 255, 0.5) !important;
+            border-radius: 12px !important;
+        }
+        .micro-tag {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            padding: 4px 8px;
+            border-radius: 999px;
+            letter-spacing: 0.05em;
+            line-height: 1;
+            transform: translateY(-1px);
+        }
+        .micro-tag.live { background: #DCFCE7; color: #14532D; }
+        .micro-tag.data { background: #E0F2FE; color: #0C4A6E; }
+        .micro-tag.global { background: #F3E8FF; color: #4C1D95; }
+        .micro-tag.focus { background: #FFEDD5; color: #7C2D12; }
+        
+        .clin-status-bar {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+        }
+        .clin-status-bar.bad { background: linear-gradient(135deg, #FEE2E2, #FCA5A5); border: 1px solid rgba(255,255,255,0.5); color: #B91C1C; }
+        .clin-status-bar.warn { background: linear-gradient(135deg, #FEF3C7, #FCD34D); border: 1px solid rgba(255,255,255,0.5); color: #B45309; }
+        .clin-status-bar.good { background: linear-gradient(135deg, #DCFCE7, #86EFAC); border: 1px solid rgba(255,255,255,0.5); color: #15803D; }
+        
+        .qa-tile-3d {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 16px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.8);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.03), inset 0 2px 4px rgba(255,255,255,0.8);
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .qa-tile-3d.hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.06), inset 0 2px 4px rgba(255,255,255,0.8);
+        }
+        .qa-icon-container {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: inset 0 2px 4px rgba(255,255,255,0.9), inset 0 -2px 6px rgba(0,0,0,0.05), 0 4px 10px rgba(0,0,0,0.05);
+        }
+        .qa-icon-container i {
+            font-size: 20px;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.15));
+        }
+        .qa-cyan .qa-icon-container { background: linear-gradient(135deg, #ccfbf1 0%, #5eead4 100%); box-shadow: inset 0 2px 4px rgba(255,255,255,0.6), inset 0 -4px 10px rgba(13,148,136,0.3), 0 4px 10px rgba(0,0,0,0.05); }
+        .qa-cyan .qa-icon-container i { color: #0f766e; }
+        .qa-cyan:hover { border-color: #5eead4; }
+        
+        .qa-purple .qa-icon-container { background: linear-gradient(135deg, #f3e8ff 0%, #d8b4fe 100%); box-shadow: inset 0 2px 4px rgba(255,255,255,0.6), inset 0 -4px 10px rgba(147,51,234,0.3), 0 4px 10px rgba(0,0,0,0.05); }
+        .qa-purple .qa-icon-container i { color: #7e22ce; }
+        .qa-purple:hover { border-color: #d8b4fe; }
+        
+        .qa-blue .qa-icon-container { background: linear-gradient(135deg, #e0f2fe 0%, #7dd3fc 100%); box-shadow: inset 0 2px 4px rgba(255,255,255,0.6), inset 0 -4px 10px rgba(2,132,199,0.3), 0 4px 10px rgba(0,0,0,0.05); }
+        .qa-blue .qa-icon-container i { color: #0369a1; }
+        .qa-blue:hover { border-color: #7dd3fc; }
+        
+        .qa-content { flex: 1; min-width: 0; }
+        .qa-title { font-weight: 700; color: #0F172A; font-size: 14px; margin-bottom: 2px; }
+        .qa-sub { font-size: 11px; color: #64748B; }
+        .clin-row-hover:hover { background: rgba(248, 250, 252, 0.6) !important; }
         .clin-row:last-child { border-bottom: none; }
         .clin-analytics {
             display: grid;
