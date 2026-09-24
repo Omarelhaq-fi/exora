@@ -471,7 +471,11 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
         close();
-        alert("Request sent! You'll get a notification once it's reviewed.");
+        if (typeof window.__markAccessPending === "function") window.__markAccessPending(bankId);
+        else if (window.__pendingAccess instanceof Set) window.__pendingAccess.add(bankId);
+        alert(data && data.alreadyRequested
+          ? "You already have a pending request for this bank — you'll be notified once it's reviewed."
+          : "Request sent! You'll get a notification once it's reviewed.");
       } catch (err) {
         statusEl.textContent = "";
         sendBtn.disabled = false;
@@ -575,15 +579,43 @@
       qbanks = cachedCategories || [];
       qbanks = qbanks.filter(q => q.kind !== "exam_prep");
 
-      // Access must be known BEFORE rendering, otherwise a null access
-      // fail-opens and every foreign bank looks selectable (e.g. Egypt for
-      // a Tunisia signup). Memoized call is free; force once when it yields
-      // nothing (stale memo after onboarding wiped window.db.access).
+      // Access must be FRESH before rendering, otherwise lock states lie:
+      // a null access fail-opens (every foreign bank looks selectable) and
+      // a stale memo hides just-approved grants. Always force here — the
+      // server profile cache (60s) bounds this to ~1 read, and this page is
+      // visited rarely. Falls back to the memo only when offline.
       try {
-        await window.bootstrapAccess();
-        if (!(window.db && window.db.access)) await window.bootstrapAccess(true);
-      } catch (_) { /* fail-open only when the network itself fails */ }
+        await window.bootstrapAccess(true);
+      } catch (_) {
+        try { await window.bootstrapAccess(); } catch (_) {}
+      }
       if (navStale(myNav)) return;
+
+      // Banks already requested (pending review) render as "Pending" so a
+      // repeat tap can never file a duplicate request.
+      let pendingAccess = new Set();
+      try {
+        const pr = await apiGet("my_access_requests");
+        if (pr && Array.isArray(pr.pendingIds)) pendingAccess = new Set(pr.pendingIds);
+      } catch (_) {}
+      window.__pendingAccess = pendingAccess;
+
+      // Flip a selection-page row to "Pending" in place after a request is
+      // filed (also used by the request modal on success). No-op elsewhere.
+      window.__markAccessPending = function(bankId) {
+        try {
+          if (window.__pendingAccess instanceof Set) window.__pendingAccess.add(bankId);
+          document.querySelectorAll(`[data-cta-bank="${bankId}"]`).forEach(el => {
+            el.innerHTML = `<button disabled style="background:#F1F5F9; color:#64748B; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:default; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;"><i data-lucide="clock" style="width:14px;height:14px;"></i><span>Pending</span></button>`;
+          });
+          document.querySelectorAll(`[data-lock-pill="${bankId}"]`).forEach(el => {
+            el.textContent = "PENDING";
+            el.style.color = "#92400E";
+            el.style.background = "#FEF3C7";
+          });
+          if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+        } catch (_) {}
+      };
 
       if (qbanks.length === 0) {
         area.innerHTML = '<div style="max-width:1000px; margin:0 auto; padding:32px 24px; font-family:Inter,-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;"><div style="border:1px solid #F1F5F9; border-radius:6px; background:#FAFAFA; color:#64748B; text-align:center; padding:16px 12px; font-size:12px;">No QBanks available yet. Admins can create them in the Admin Panel.</div></div>';
@@ -619,35 +651,47 @@
           : escQ(countryLabels[q.country] || q.country || "");
 
         const allowed = isAllowedMain(q.id);
+        const pending = !allowed && pendingAccess.has(q.id);
         const safeQName = String(q.name || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
         const clickAttr = allowed
           ? `onclick="window.selectQBank('${q.id}')"`
-          : `onclick="window.qbankRequestAccess('${q.id}','${safeQName}')"`;
+          : (pending ? "" : `onclick="window.qbankRequestAccess('${q.id}','${safeQName}')"`);
+        const rowCursor = allowed || pending ? (pending ? "cursor:default;" : "cursor:pointer;") : "cursor:pointer;";
 
         const cta = allowed
           ? `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.selectQBank('${q.id}')">
                <span>Select</span>
                <i data-lucide="arrow-right" style="width:14px;height:14px;"></i>
              </button>`
-          : `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${q.id}','${safeQName}')">
-               <i data-lucide="lock" style="width:14px;height:14px;"></i>
-               <span>Request Access</span>
-             </button>`;
+          : (pending
+            ? `<button disabled style="background:#F1F5F9; color:#64748B; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:default; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;">
+                 <i data-lucide="clock" style="width:14px;height:14px;"></i>
+                 <span>Pending</span>
+               </button>`
+            : `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${q.id}','${safeQName}')">
+                 <i data-lucide="lock" style="width:14px;height:14px;"></i>
+                 <span>Request Access</span>
+               </button>`);
+        const pill = allowed
+          ? ""
+          : (pending
+            ? `<span data-lock-pill="${q.id}" style="font-size:11px; font-weight:700; color:#92400E; background:#FEF3C7; padding:2px 9px; border-radius:999px; white-space:nowrap;">PENDING</span>`
+            : `<span data-lock-pill="${q.id}" style="font-size:11px; font-weight:700; color:#C62828; background:#FBEAEA; padding:2px 9px; border-radius:999px; white-space:nowrap;">LOCKED</span>`);
 
         html += `
-          <div class="qbank-select-card" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; cursor:pointer; opacity:${allowed ? "1" : "0.65"};" ${clickAttr} onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
-             <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:${allowed ? "#e6f2f2" : "#F1F5F9"}; border-radius:6px; overflow:hidden;">
-               ${allowed ? flagHtml : '<i data-lucide="lock" style="width:20px;height:20px;color:#94A3B8;"></i>'}
+          <div class="qbank-select-card" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; ${rowCursor} opacity:${allowed ? "1" : "0.65"};" ${clickAttr} onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
+             <div style="flex-shrink:0; display:flex; align-items:center; justify-content:center; width:40px; height:40px; background:#e6f2f2; border-radius:6px; overflow:hidden;">
+               ${flagHtml}
              </div>
              <div style="flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:2px;">
                <div style="display:flex; align-items:center; gap:8px; min-width:0;">
                  <span style="font-size:15px; font-weight:700; color:#0F172A; line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escQ(q.name)}</span>
-                 ${allowed ? '' : '<span style="font-size:11px; font-weight:700; color:#C62828; background:#FBEAEA; padding:2px 9px; border-radius:999px; white-space:nowrap;">LOCKED</span>'}
+                 ${pill}
                </div>
                <div style="font-size:12px; color:#64748B;">${subLabel}</div>
              </div>
-             <div style="flex-shrink:0;">
+             <div style="flex-shrink:0;" data-cta-bank="${q.id}">
                ${cta}
              </div>
           </div>`;
