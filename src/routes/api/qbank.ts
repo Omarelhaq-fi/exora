@@ -12,6 +12,7 @@ import {
   getQbankListCache,
   setQbankListCache,
   findCachedQbankMeta,
+  patchCachedQbankStorageProvider,
   getCachedUserProfile,
   setCachedUserProfile,
   invalidateUserProfile,
@@ -68,7 +69,7 @@ interface BankAccessResult {
   ok: boolean;
   status: 200 | 403 | 404;
   profile: { country: string; grants: string[] };
-  meta: { country: string; kind: string } | null;
+  meta: { country: string; kind: string; storage_provider?: string } | null;
 }
 
 // Resolve access for one bank: metadata from the shared list cache (0 reads
@@ -83,19 +84,39 @@ async function resolveBankAccess(
 ): Promise<BankAccessResult> {
   let profile = await loadUserProfile(sa, token, uid);
   const hit = findCachedQbankMeta(qbankId);
-  let meta: { country: string; kind: string } | null = hit
-    ? { country: hit.country, kind: hit.kind }
+  let meta: { country: string; kind: string; storage_provider?: string } | null = hit
+    ? { country: hit.country, kind: hit.kind, storage_provider: hit.storage_provider }
     : null;
-  if (!meta && !getQbankListCache()) {
-    const bRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
-    const bRes = await fetch(bRef, { headers: { Authorization: `Bearer ${token}` } });
-    if (bRes.ok) {
-      const bd = await bRes.json();
-      meta = {
-        country: String(bd.fields?.country?.stringValue || "global"),
-        kind: String(bd.fields?.kind?.stringValue || "main"),
-      };
-    }
+  // Repair path: cached/index entries built before the R2 migration (or a
+  // cold isolate with no list cache) may lack storage_provider. One direct
+  // doc read is far cheaper than falling through to N individual question
+  // reads. Checked-legacy banks are memoized as "" (see
+  // patchCachedQbankStorageProvider) so this costs at most 1 read per bank
+  // per isolate lifetime — never per request.
+  if ((!meta || meta.storage_provider === undefined) && /^[a-zA-Z0-9_-]+$/.test(qbankId)) {
+    try {
+      const bRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
+      const bRes = await fetch(bRef, { headers: { Authorization: `Bearer ${token}` } });
+      if (bRes.ok) {
+        const bd = await bRes.json();
+        const freshProvider = bd.fields?.storage_provider?.stringValue
+          ? String(bd.fields.storage_provider.stringValue)
+          : "";
+        try {
+          patchCachedQbankStorageProvider(qbankId, freshProvider);
+        } catch { /* memo best-effort only */ }
+        const fresh = {
+          country: String(bd.fields?.country?.stringValue || "global"),
+          kind: String(bd.fields?.kind?.stringValue || "main"),
+          storage_provider: freshProvider || undefined,
+        };
+        // Prefer fresh values when we had nothing, or fill in the missing
+        // storage flag while keeping the cached country/kind.
+        meta = meta
+          ? { ...meta, storage_provider: fresh.storage_provider }
+          : fresh;
+      }
+    } catch { /* keep cached meta; question fetch falls back to chunks/questions */ }
   }
   if (!meta) return { ok: false, status: 404, profile, meta: null };
   if (bankAccessAllowed(profile, meta, qbankId)) {
@@ -164,7 +185,8 @@ async function loadAllBanks(
         const kind = doc.fields?.kind?.stringValue || "main";
         const college = doc.fields?.college?.stringValue || "";
         const year = doc.fields?.year?.stringValue || "";
-        qbanks.push({ id, name, country, updatedAt, isLocked, isPartyLocked, resources, kind, college, year });
+        const storage_provider = doc.fields?.storage_provider?.stringValue || "";
+        qbanks.push({ id, name, country, updatedAt, isLocked, isPartyLocked, resources, kind, college, year, storage_provider });
       }
     }
     pageToken = data.nextPageToken || "";
@@ -201,6 +223,9 @@ const DRM_KEY_STR = process.env.DRM_KEY || "8f7e6d5c4b3a29108f7e6d5c4b3a2910";
 // collection scan (N reads) on every call.
 let examPrepCache: { items: any[]; exp: number } | null = null;
 const EXAM_PREP_TTL_MS = 5 * 60_000;
+// Library book lists: per bank, tiny (few docs), 5-min shared cache.
+const libraryListCache = new Map<string, { items: any[]; exp: number }>();
+const LIBRARY_LIST_TTL_MS = 5 * 60_000;
 // Study concepts are identical for every user asking the same question.
 // 10-min shared cache turns repeat views into 0 Firestore reads.
 const studyConceptCache = new Map<string, { data: { studyConcept: string | null; studyConceptLang: string | null }; exp: number }>();
@@ -370,6 +395,82 @@ export const Route = createFileRoute("/api/qbank")({
             }
             examPrepCache = { items, exp: Date.now() + EXAM_PREP_TTL_MS };
             return json({ items }, 200, cors);
+          }
+
+          // ---------- Per-bank medical library (books) ----------
+          // Storage: qbanks/{bankId}/books/{bookId} (one doc per book).
+          // list_books = metadata only (cached 5 min shared); get_book =
+          // single-doc read. Clients cache bodies forever in IndexedDB keyed
+          // by updatedAt, so repeat opens cost 0 reads.
+          if (action === "list_books") {
+            const qbankId = urlObj.searchParams.get("qbankId");
+            if (!qbankId) return json({ error: "Missing qbankId" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
+            const access = await resolveBankAccess(sa, token, uid, qbankId);
+            if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);
+            const nowLib = Date.now();
+            const libHit = libraryListCache.get(qbankId);
+            if (libHit && libHit.exp > nowLib) {
+              return json({ books: libHit.items, cached: true }, 200, cors);
+            }
+            const books: any[] = [];
+            let libToken = "";
+            while (true) {
+              const params = new URLSearchParams({ pageSize: "100" });
+              if (libToken) params.set("pageToken", libToken);
+              const r = await fetch(
+                `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/books?${params}`,
+                { headers: { Authorization: `Bearer ${token}` } }
+              );
+              if (!r.ok && r.status !== 404) return json({ error: "Failed to list books" }, 500, cors);
+              if (r.status === 404) break;
+              const d = await r.json();
+              for (const doc of (d.documents || [])) {
+                const id = String(doc.name.split("/").pop());
+                const f = doc.fields || {};
+                books.push({
+                  id,
+                  title: f.title?.stringValue || id,
+                  subject: f.subject?.stringValue || "",
+                  lessonCount: parseInt(f.lessonCount?.integerValue || "0", 10) || 0,
+                  updatedAt: parseInt(f.updatedAt?.integerValue || "0", 10) || 0,
+                });
+              }
+              libToken = d.nextPageToken || "";
+              if (!libToken) break;
+            }
+            books.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+            libraryListCache.set(qbankId, { items: books, exp: Date.now() + LIBRARY_LIST_TTL_MS });
+            return json({ books }, 200, cors);
+          }
+
+          if (action === "get_book") {
+            const qbankId = urlObj.searchParams.get("qbankId");
+            const bookId = urlObj.searchParams.get("bookId");
+            if (!qbankId || !bookId) return json({ error: "Missing ids" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(qbankId) || !/^[a-z0-9-]+$/.test(bookId)) return json({ error: "Invalid ids" }, 400, cors);
+            const access = await resolveBankAccess(sa, token, uid, qbankId);
+            if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);
+            const r = await fetch(
+              `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/books/${bookId}`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (!r.ok) return json({ error: "Book not found" }, 404, cors);
+            const doc = await r.json();
+            const f = doc.fields || {};
+            let data: any = null;
+            try { data = JSON.parse(f.data?.stringValue || "null"); } catch {}
+            if (!data || !Array.isArray(data.units)) return json({ error: "Book data corrupt" }, 500, cors);
+            return json({
+              book: {
+                id: bookId,
+                title: f.title?.stringValue || bookId,
+                subject: f.subject?.stringValue || "",
+                updatedAt: parseInt(f.updatedAt?.integerValue || "0", 10) || 0,
+                lessonCount: parseInt(f.lessonCount?.integerValue || "0", 10) || 0,
+                units: data.units,
+              },
+            }, 200, cors);
           }
 
           // ---------- Country-based qbank access ----------
@@ -1130,6 +1231,35 @@ export const Route = createFileRoute("/api/qbank")({
               return json({ error: "Failed to save study concept" }, 500, cors);
             }
             setCachedStudyConcept(`${qbankId}/${questionId}`, { studyConcept: String(studyConcept), studyConceptLang: conceptLang });
+            // Concepts digest for 1-read exports: upsert this question's entry
+            // into qbanks/{bank}/library/concepts (map key = question id, so
+            // concurrent saves for different questions never clobber each
+            // other and re-saves overwrite their own key). Best-effort — a
+            // digest failure must never fail the concept save itself.
+            // Client sends code/subject/chapter it already holds (0 extra reads).
+            try {
+              const entryMask = `updateMask.fieldPaths=${encodeURIComponent(`entries.${questionId}`)}&updateMask.fieldPaths=updatedAt`;
+              const digestUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/library/concepts?${entryMask}`;
+              const entryFields: Record<string, unknown> = {
+                code: { stringValue: String(body.code || "").slice(0, 24) },
+                subject: { stringValue: String(body.subject || "").slice(0, 120) },
+                chapter: { stringValue: String(body.chapter || "").slice(0, 120) },
+                concept: { stringValue: String(studyConcept) },
+                lang: { stringValue: conceptLang || "" },
+              };
+              fetch(digestUrl, {
+                method: "PATCH",
+                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  fields: {
+                    entries: { mapValue: { fields: { [questionId]: { mapValue: { fields: entryFields } } } } },
+                    updatedAt: { integerValue: String(Date.now()) },
+                  },
+                }),
+              }).catch((e) => console.warn("[concepts digest] upsert failed:", (e as Error).message));
+            } catch (e) {
+              console.warn("[concepts digest] upsert failed:", (e as Error).message);
+            }
             return json({ ok: true }, 200, cors);
           }
           

@@ -97,6 +97,45 @@ async function newUniqueCode(reserved: Set<string>): Promise<string> {
   return generateQuestionCode() + Date.now().toString(36).slice(-2).toUpperCase();
 }
 
+// ---------- Medical library books ----------
+// Accepted import shape (also as an array of books):
+//   { "title", "subject"?, "units": [{ "title", "chapters": [{ "title", "lessons": [{ "title", "body" }] }] }] }
+// Shorthands: top-level "chapters" wraps into one unit; top-level "lessons"
+// wraps into one unit + one chapter. Re-importing the same title overwrites
+// the same book id (idempotent updates).
+function libraryBookSlug(title: unknown): string {
+  const s = String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return s || "book";
+}
+
+function normalizeLibraryBook(raw: any, fallbackTitle: string): { title: string; subject: string; units: any[]; lessonCount: number } {
+  const title = String((raw && raw.title) || fallbackTitle || "Untitled Book").slice(0, 120);
+  const subject = String((raw && raw.subject) || "").slice(0, 120);
+  const r = (raw && typeof raw === "object") ? raw : {};
+  const rawUnits = Array.isArray(r.units) ? r.units
+    : Array.isArray(r.chapters) ? [{ title: "", chapters: r.chapters }]
+    : Array.isArray(r.lessons) ? [{ title: "", chapters: [{ title: "", lessons: r.lessons }] }]
+    : [];
+  const units: any[] = [];
+  let lessonCount = 0;
+  for (const u of rawUnits) {
+    if (!u || typeof u !== "object") continue;
+    const uChapters = Array.isArray(u.chapters) ? u.chapters : (Array.isArray(u.lessons) ? [{ title: u.title, lessons: u.lessons }] : []);
+    const chapters: any[] = [];
+    for (const c of uChapters) {
+      if (!c || typeof c !== "object") continue;
+      const lessons = (Array.isArray(c.lessons) ? c.lessons : [])
+        .filter((l: any) => l && typeof l === "object")
+        .map((l: any) => ({ title: String(l.title || "Untitled lesson").slice(0, 140), body: String(l.body || "") }))
+        .filter((l: any) => l.title || l.body);
+      lessonCount += lessons.length;
+      if (lessons.length) chapters.push({ title: String(c.title || "").slice(0, 140), lessons });
+    }
+    if (chapters.length) units.push({ title: String(u.title || "").slice(0, 140), chapters });
+  }
+  return { title, subject, units, lessonCount };
+}
+
 function toFields(patch: Record<string, string | number | boolean | Date | null>) {
   const out: Record<string, FSValue> = {};
   for (const [k, v] of Object.entries(patch)) {
@@ -347,8 +386,9 @@ type Body = {
     | "get_ai_providers" | "set_ai_providers" | "test_ai_key"
     | "get_ai_capacity" | "get_ai_recent_calls"
     | "list_ai_functions" | "check_ai_function" | "check_all_ai_functions" | "set_ai_custom_chains"
-    | "create_qbank" | "list_qbanks" | "delete_qbank" | "add_qbank_question" | "batch_import_qbank_txt"
-    | "list_qbank_questions" | "delete_qbank_question" | "delete_multiple_qbank_questions" | "update_qbank_question" | "rename_qbank_subject" | "rename_qbank_chapter" | "batch_rename_qbank_categories"
+     | "create_qbank" | "list_qbanks" | "delete_qbank" | "add_qbank_question" | "batch_import_qbank_txt"
+     | "list_qbank_questions" | "delete_qbank_question" | "delete_multiple_qbank_questions" | "update_qbank_question" | "rename_qbank_subject" | "rename_qbank_chapter" | "batch_rename_qbank_categories"
+     | "list_library_books" | "import_library_json" | "delete_library_book" | "export_study_concepts" | "backfill_concepts_digest"
     | "edit_qbank_settings" | "clear_qbank_question_reports" | "list_reported_questions" | "backfill_qbank_codes"
     | "list_exam_prep" | "save_exam_prep" | "delete_exam_prep"
     | "upload_image"
@@ -393,6 +433,8 @@ type Body = {
   isPartyLocked?: boolean;
   resources?: { title: string, url: string, type: string }[];
   fileSubcategory?: string;
+  bookTitle?: string;
+  bookId?: string;
   chosenSubjects?: string[];
   imageBase64?: string;
   backfillMode?: "missing" | "regenerate";
@@ -965,6 +1007,7 @@ export const Route = createFileRoute("/api/admin")({
           "set_credit_config", "delete_user",
           "set_api_keys", "set_maintenance", "set_payments_settings", "set_auth_settings", "set_peer_stats_settings",
           "create_qbank", "delete_qbank", "add_qbank_question", "batch_import_qbank_txt",
+          "import_library_json", "delete_library_book", "backfill_concepts_digest",
           "rename_qbank_subject", "rename_qbank_chapter", "batch_rename_qbank_categories"
         ]);
         if (MUTATING_ACTIONS.has(body.action)) {
@@ -2137,6 +2180,227 @@ Text to process:\n${body.rawText}`
             }));
             await fsSetMerge(`qbanks/${body.qbankId}`, toFields({ updatedAt: Date.now() }));
             return json({ ok: true }, 200, cors);
+          }
+
+          // ---------- Medical library (per-bank books) ----------
+          // Storage: qbanks/{bankId}/books/{bookId} — one doc per book:
+          //   { title, subject, updatedAt, lessonCount, data: JSON {title,subject,units} }
+          // NOTE: book import/delete NEVER bumps qbanks/{id}.updatedAt — that
+          // stamp versions the question payload, and bumping it would force
+          // every student to re-download all questions. Books carry their own
+          // updatedAt and clients version them via list_books.
+
+          if (body.action === "list_library_books") {
+            if (!body.qbankId) return json({ error: "Missing qbankId" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(body.qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
+            const sa = getServiceAccount();
+            const token = await getGoogleAccessToken();
+            const books: any[] = [];
+            let pageToken = "";
+            while (true) {
+              const params = new URLSearchParams({ pageSize: "100" });
+              if (pageToken) params.set("pageToken", pageToken);
+              const r = await fetch(`https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${body.qbankId}/books?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+              if (!r.ok && r.status !== 404) return json({ error: "Failed to list books" }, 500, cors);
+              if (r.status === 404) break;
+              const d = await r.json();
+              for (const doc of (d.documents || [])) {
+                const id = String(doc.name.split("/").pop());
+                const f = doc.fields || {};
+                books.push({
+                  id,
+                  title: f.title?.stringValue || id,
+                  subject: f.subject?.stringValue || "",
+                  lessonCount: parseInt(f.lessonCount?.integerValue || "0", 10) || 0,
+                  updatedAt: parseInt(f.updatedAt?.integerValue || "0", 10) || 0,
+                });
+              }
+              pageToken = d.nextPageToken || "";
+              if (!pageToken) break;
+            }
+            books.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+            return json({ books }, 200, cors);
+          }
+
+          if (body.action === "import_library_json") {
+            if (!body.qbankId || !body.rawText) return json({ error: "Missing qbankId or rawText" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(body.qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
+            let parsed: any;
+            try { parsed = JSON.parse(body.rawText); }
+            catch { return json({ error: "Invalid JSON — paste one book object or an array of books" }, 400, cors); }
+            const raws = Array.isArray(parsed) ? parsed : [parsed];
+            if (raws.length === 0 || raws.length > 20) return json({ error: "Send 1–20 books per import" }, 400, cors);
+            const seen = new Set<string>();
+            const imported: any[] = [];
+            for (let bi = 0; bi < raws.length; bi++) {
+              const norm = normalizeLibraryBook(raws[bi], (bi === 0 && body.bookTitle) || `Book ${bi + 1}`);
+              if (!norm.units.length || !norm.lessonCount) {
+                return json({ error: `Book ${bi + 1} ("${norm.title}"): no lessons found. Expected { "title", "units": [{ "title", "chapters": [{ "title", "lessons": [{ "title", "body" }] }] }] }` }, 400, cors);
+              }
+              const payload = JSON.stringify({ title: norm.title, subject: norm.subject, units: norm.units });
+              if (payload.length > 900_000) {
+                return json({ error: `Book "${norm.title}" is ${(payload.length / 1024).toFixed(0)}KB — split it into smaller books under ~900KB each` }, 400, cors);
+              }
+              let bookId = libraryBookSlug(norm.title);
+              if (seen.has(bookId)) {
+                let k = 2;
+                while (seen.has(`${bookId}-${k}`)) k++;
+                bookId = `${bookId}-${k}`;
+              }
+              seen.add(bookId);
+              await fsSetMerge(`qbanks/${body.qbankId}/books/${bookId}`, toFields({
+                title: norm.title,
+                subject: norm.subject,
+                updatedAt: Date.now(),
+                lessonCount: norm.lessonCount,
+                data: payload,
+              }));
+              imported.push({ id: bookId, title: norm.title, subject: norm.subject, lessons: norm.lessonCount });
+            }
+            return json({ ok: true, imported: imported.length, books: imported }, 200, cors);
+          }
+
+          if (body.action === "delete_library_book") {
+            if (!body.qbankId || !body.bookId) return json({ error: "Missing ids" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(body.qbankId) || !/^[a-z0-9-]+$/.test(body.bookId)) return json({ error: "Invalid ids" }, 400, cors);
+            await fsDeleteDoc(`qbanks/${body.qbankId}/books/${body.bookId}`);
+            return json({ ok: true }, 200, cors);
+          }
+
+          if (body.action === "export_study_concepts") {
+            if (!body.qbankId) return json({ error: "Missing qbankId" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(body.qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
+            const sa = getServiceAccount();
+            const token = await getGoogleAccessToken();
+            const digestUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${body.qbankId}/library/concepts`;
+            const fmtEntry = (code: string, subject: string, chapter: string, lang: string, concept: string) => {
+              const out: string[] = [];
+              out.push("----------------------------------------------------------------");
+              out.push(`[${code}] Subject: ${subject || "?"} | Chapter: ${chapter || "?"}${lang ? ` | Lang: ${lang}` : ""}`);
+              out.push("----------------------------------------------------------------");
+              out.push(concept);
+              out.push("");
+              return out.join("\n");
+            };
+            const fmtFile = (bank: string, withConcepts: number, bodyText: string, note: string) => {
+              const header = [
+                "================================================================",
+                `STUDY CONCEPTS EXPORT — qbank: ${bank}`,
+                `Exported: ${new Date().toISOString()} | Study concepts: ${withConcepts} | served from digest (1 read)`,
+                note,
+                "Author books from these concepts, then import them as JSON via",
+                "Admin > Library > Import book.",
+                "================================================================",
+                "",
+              ].join("\n");
+              let text = header + bodyText;
+              if (text.length > 8_000_000) {
+                text = text.slice(0, 8_000_000) + "\n\n[TRUNCATED — bank too large for one file]";
+              }
+              return text;
+            };
+            // DIGEST ONLY — exactly 1 Firestore read (the digest doc itself).
+            // This endpoint NEVER scans the questions collection. Coverage:
+            // save_study_concept maintains entries incrementally; older
+            // concepts need one explicit Backfill (backfill_concepts_digest).
+            const dg = await fetch(digestUrl, { headers: { Authorization: `Bearer ${token}` } });
+            if (!dg.ok && dg.status !== 404) return json({ error: "Failed to read concepts digest" }, 500, cors);
+            const df = dg.ok ? ((await dg.json()).fields || {}) : {};
+            const entries = df.entries?.mapValue?.fields || {};
+            const ids = Object.keys(entries);
+            const parts: string[] = [];
+            for (const qid of ids) {
+              const ef = entries[qid]?.mapValue?.fields || {};
+              const concept = ef.concept?.stringValue || "";
+              if (!concept) continue;
+              parts.push(fmtEntry(
+                ef.code?.stringValue || qid,
+                ef.subject?.stringValue || "",
+                ef.chapter?.stringValue || "",
+                ef.lang?.stringValue || "",
+                concept,
+              ));
+            }
+            const backfilledAt = df.backfilledAt?.stringValue || df.backfilledAt?.timestampValue || null;
+            const note = backfilledAt
+              ? `Digest backfilled: ${backfilledAt}.`
+              : "Digest keeps filling as students generate concepts — run Backfill digest for full coverage of older concepts.";
+            return json({
+              filename: `concepts-${body.qbankId}.txt`,
+              text: fmtFile(body.qbankId, parts.length, parts.join("\n"), note),
+              total: parts.length,
+              withConcepts: parts.length,
+              cached: true,
+              backfilledAt,
+            }, 200, cors);
+          }
+
+          if (body.action === "backfill_concepts_digest") {
+            if (!body.qbankId) return json({ error: "Missing qbankId" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(body.qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
+            // Explicit one-time scan: walks every question ONCE to seed the
+            // digest. Export itself never scans — this is the only action
+            // that does, and only when the admin clicks Backfill.
+            const sa = getServiceAccount();
+            const token = await getGoogleAccessToken();
+            const digestEntries: Record<string, any> = {};
+            let total = 0, withConcepts = 0;
+            let pageToken = "";
+            while (true) {
+              const params = new URLSearchParams({ pageSize: "300" });
+              if (pageToken) params.set("pageToken", pageToken);
+              const r: Response = await fetch(`https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${body.qbankId}/questions?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+              if (!r.ok && r.status !== 404) return json({ error: "Failed to list questions" }, 500, cors);
+              if (r.status === 404) break;
+              const d: any = await r.json();
+              for (const doc of ((d.documents || []) as any[])) {
+                total++;
+                const qid = String(doc.name.split("/").pop());
+                const f = doc.fields || {};
+                const concept = f.studyConcept?.stringValue || "";
+                if (!concept) continue;
+                const conceptLang = f.studyConceptLang?.stringValue || "";
+                let code = "", subject = "", chapter = "";
+                try {
+                  const data = JSON.parse(f.data?.stringValue || "{}");
+                  code = String(data.code || "");
+                  subject = String(data.subject || "");
+                  chapter = String(data.chapter || "");
+                } catch {}
+                withConcepts++;
+                digestEntries[qid] = { mapValue: { fields: {
+                  code: { stringValue: code || qid },
+                  subject: { stringValue: subject },
+                  chapter: { stringValue: chapter },
+                  concept: { stringValue: concept },
+                  lang: { stringValue: conceptLang },
+                } } };
+              }
+              pageToken = d.nextPageToken || "";
+              if (!pageToken) break;
+            }
+            // Merge with live entries other students may have saved mid-scan:
+            // read the current digest first so incremental upserts are kept.
+            try {
+              const cur = await fetch(`https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${body.qbankId}/library/concepts`, { headers: { Authorization: `Bearer ${token}` } });
+              if (cur.ok) {
+                const curEntries = ((await cur.json()).fields?.entries?.mapValue?.fields || {});
+                for (const k of Object.keys(curEntries)) {
+                  if (!digestEntries[k]) digestEntries[k] = curEntries[k];
+                }
+              }
+            } catch {}
+            const digestFields: Record<string, any> = {
+              updatedAt: { integerValue: String(Date.now()) },
+              backfilledAt: { timestampValue: new Date().toISOString() },
+              questionCount: { integerValue: String(total) },
+              entries: { mapValue: { fields: digestEntries } },
+            };
+            if (JSON.stringify(digestFields).length > 900_000) {
+              return json({ error: `Digest would exceed the 1MB doc cap (${withConcepts} concepts) — export stays correct via per-question reads; contact dev to shard` }, 400, cors);
+            }
+            await fsSetMerge(`qbanks/${body.qbankId}/library/concepts`, digestFields as Record<string, FSValue>);
+            return json({ ok: true, total, withConcepts }, 200, cors);
           }
 
           if (body.action === "clear_qbank_question_reports") {

@@ -25,6 +25,7 @@ export interface QbankListEntry {
   kind: string;
   college: string;
   year: string;
+  storage_provider?: string;
 }
 
 interface ListCache {
@@ -61,15 +62,34 @@ export function invalidateQbankListCache(): void {
   listCache = null;
 }
 
-/** Country/kind lookup for access checks without a Firestore read. */
+/**
+ * Backfill a bank's storage flag in the in-memory list (e.g. after the
+ * one-off repair read in resolveBankAccess) so later calls stay at 0 reads.
+ * Pass "" when the bank doc has no provider (legacy Firestore-chunks bank)
+ * to mark it checked — callers must test `=== undefined` (unchecked) rather
+ * than falsiness so checked-legacy banks are not re-fetched every time.
+ */
+export function patchCachedQbankStorageProvider(id: string, provider: string): void {
+  const c = getQbankListCache();
+  if (!c) return;
+  const b = c.banks.find((x) => x.id === id);
+  if (b) b.storage_provider = provider;
+}
+
+/** Country/kind/storage lookup for access checks without a Firestore read. */
 export function findCachedQbankMeta(
   id: string,
-): { id: string; country: string; kind: string } | null {
+): { id: string; country: string; kind: string; storage_provider?: string } | null {
   const c = getQbankListCache();
   if (!c) return null;
   const b = c.banks.find((x) => x.id === id);
   if (!b) return null;
-  return { id: b.id, country: String(b.country || "global"), kind: String(b.kind || "main") };
+  return {
+    id: b.id,
+    country: String(b.country || "global"),
+    kind: String(b.kind || "main"),
+    storage_provider: typeof b.storage_provider === "string" ? b.storage_provider : undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------
