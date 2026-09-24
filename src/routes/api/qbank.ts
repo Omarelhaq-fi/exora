@@ -10,215 +10,17 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { dbStats } from "@/lib/firebase.server";
 import {
   getQbankListCache,
-  setQbankListCache,
-  findCachedQbankMeta,
-  patchCachedQbankStorageProvider,
-  getCachedUserProfile,
-  setCachedUserProfile,
-  invalidateUserProfile,
   type QbankListEntry,
 } from "@/lib/qbank-cache.server";
+import {
+  buildAccessBundle,
+  getAccessBundleCached,
+  loadAllBanks,
+  resolveBankAccessEdge as resolveBankAccess,
+  filterBanksForBundle,
+} from "@/lib/qbank-access.server";
+import { encryptForBank, splitQuestionsForStatic } from "@/lib/qbank-drm.server";
 
-// Fetch + cache the caller's users_index profile (country + qbankGrants).
-// 60s per-user TTL avoids a Firestore read on every dashboard navigation.
-async function fetchUserProfileFresh(
-  sa: { project_id: string },
-  token: string,
-  uid: string,
-): Promise<{ country: string; grants: string[] }> {
-  const uRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}`;
-  const uRes = await fetch(uRef, { headers: { Authorization: `Bearer ${token}` } });
-  let country = "";
-  let grants: string[] = [];
-  if (uRes.ok) {
-    const ud = await uRes.json();
-    country = String(ud.fields?.country?.stringValue || "").toLowerCase();
-    const gv = ud.fields?.qbankGrants?.arrayValue?.values || [];
-    grants = gv.map((v: any) => String(v.stringValue || "")).filter(Boolean);
-  }
-  const profile = { country, grants };
-  setCachedUserProfile(uid, profile);
-  return profile;
-}
-
-async function loadUserProfile(
-  sa: { project_id: string },
-  token: string,
-  uid: string,
-): Promise<{ country: string; grants: string[] }> {
-  const cached = getCachedUserProfile(uid);
-  if (cached) return cached;
-  return fetchUserProfileFresh(sa, token, uid);
-}
-
-// Single access rule shared by every endpoint: legacy (no-country) accounts
-// bypass; otherwise same-country banks open, and an admin grant
-// (request_access approval) unlocks that bank regardless of kind — matching
-// what the client UI already promises on the bank cards.
-function bankAccessAllowed(
-  profile: { country: string; grants: string[] },
-  meta: { country: string; kind: string },
-  qbankId: string,
-): boolean {
-  if (!profile.country) return true; // legacy
-  if (profile.grants.includes(qbankId)) return true;
-  return meta.country.toLowerCase() === profile.country;
-}
-
-interface BankAccessResult {
-  ok: boolean;
-  status: 200 | 403 | 404;
-  profile: { country: string; grants: string[] };
-  meta: { country: string; kind: string; storage_provider?: string } | null;
-}
-
-// Resolve access for one bank: metadata from the shared list cache (0 reads
-// when warm, single-doc fallback on cold cache). On DENY, does exactly one
-// fresh profile read before giving up — covers the race where a grant was
-// approved seconds ago or cached on another isolate.
-async function resolveBankAccess(
-  sa: { project_id: string },
-  token: string,
-  uid: string,
-  qbankId: string,
-): Promise<BankAccessResult> {
-  let profile = await loadUserProfile(sa, token, uid);
-  const hit = findCachedQbankMeta(qbankId);
-  let meta: { country: string; kind: string; storage_provider?: string } | null = hit
-    ? { country: hit.country, kind: hit.kind, storage_provider: hit.storage_provider }
-    : null;
-  // Repair path: cached/index entries built before the R2 migration (or a
-  // cold isolate with no list cache) may lack storage_provider. One direct
-  // doc read is far cheaper than falling through to N individual question
-  // reads. Checked-legacy banks are memoized as "" (see
-  // patchCachedQbankStorageProvider) so this costs at most 1 read per bank
-  // per isolate lifetime — never per request.
-  if ((!meta || meta.storage_provider === undefined) && /^[a-zA-Z0-9_-]+$/.test(qbankId)) {
-    try {
-      const bRef = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}`;
-      const bRes = await fetch(bRef, { headers: { Authorization: `Bearer ${token}` } });
-      if (bRes.ok) {
-        const bd = await bRes.json();
-        const freshProvider = bd.fields?.storage_provider?.stringValue
-          ? String(bd.fields.storage_provider.stringValue)
-          : "";
-        try {
-          patchCachedQbankStorageProvider(qbankId, freshProvider);
-        } catch { /* memo best-effort only */ }
-        const fresh = {
-          country: String(bd.fields?.country?.stringValue || "global"),
-          kind: String(bd.fields?.kind?.stringValue || "main"),
-          storage_provider: freshProvider || undefined,
-        };
-        // Prefer fresh values when we had nothing, or fill in the missing
-        // storage flag while keeping the cached country/kind.
-        meta = meta
-          ? { ...meta, storage_provider: fresh.storage_provider }
-          : fresh;
-      }
-    } catch { /* keep cached meta; question fetch falls back to chunks/questions */ }
-  }
-  if (!meta) return { ok: false, status: 404, profile, meta: null };
-  if (bankAccessAllowed(profile, meta, qbankId)) {
-    return { ok: true, status: 200, profile, meta };
-  }
-  // Stale-cache retry: drop the cached profile and read it fresh once.
-  invalidateUserProfile(uid);
-  profile = await fetchUserProfileFresh(sa, token, uid);
-  if (bankAccessAllowed(profile, meta, qbankId)) {
-    return { ok: true, status: 200, profile, meta };
-  }
-  return { ok: false, status: 403, profile, meta };
-}
-
-// Fetch + cache the full qbank metadata list (shared with bootstrap_access).
-async function loadAllBanks(
-  sa: { project_id: string },
-  token: string,
-): Promise<QbankListEntry[]> {
-  const cached = getQbankListCache();
-  if (cached) return cached.banks;
-
-  // 1 read: fetch the pre-built index document written by Admin on every change.
-  // If it doesn't exist yet (first deploy), fall back to the full collection query.
-  const indexUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/sys/qbank_index`;
-  const indexRes = await fetch(indexUrl, { headers: { Authorization: `Bearer ${token}` } });
-
-  if (indexRes.ok) {
-    const indexData = await indexRes.json();
-    const jsonStr = indexData.fields?.data?.stringValue;
-    if (jsonStr) {
-      try {
-        const qbanks: QbankListEntry[] = JSON.parse(jsonStr);
-        setQbankListCache(qbanks);
-        return qbanks;
-      } catch(e) {
-        console.error("[loadAllBanks] Failed to parse qbank_index:", e);
-      }
-    }
-  }
-
-  // Fallback: full collection query (used before the first Admin action builds the index)
-  const qbanks: QbankListEntry[] = [];
-  let pageToken = "";
-  while (true) {
-    const params = new URLSearchParams({ pageSize: "300" });
-    if (pageToken) params.set("pageToken", pageToken);
-    const listRes = await fetch(
-      `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks?${params}`,
-      { method: "GET", headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!listRes.ok && listRes.status !== 404) throw new Error("Failed to load qbanks");
-    if (listRes.status === 404) break;
-    const data = await listRes.json();
-    if (data && Array.isArray(data.documents)) {
-      for (const doc of data.documents) {
-        const id = doc.name.split("/").pop();
-        const name = doc.fields?.name?.stringValue || id;
-        const country = doc.fields?.country?.stringValue || "global";
-        const updatedAtStr = doc.fields?.updatedAt?.integerValue || doc.fields?.updatedAt?.doubleValue;
-        const updatedAt = updatedAtStr ? parseInt(String(updatedAtStr), 10) : 0;
-        const isLocked = doc.fields?.isLocked?.booleanValue || doc.fields?.isLocked?.stringValue === "true" || false;
-        const isPartyLocked = doc.fields?.isPartyLocked?.booleanValue || doc.fields?.isPartyLocked?.stringValue === "true" || false;
-        let resources = [];
-        try { resources = JSON.parse(doc.fields?.resources?.stringValue || "[]"); } catch(e) {}
-        const kind = doc.fields?.kind?.stringValue || "main";
-        const college = doc.fields?.college?.stringValue || "";
-        const year = doc.fields?.year?.stringValue || "";
-        const storage_provider = doc.fields?.storage_provider?.stringValue || "";
-        qbanks.push({ id, name, country, updatedAt, isLocked, isPartyLocked, resources, kind, college, year, storage_provider });
-      }
-    }
-    pageToken = data.nextPageToken || "";
-    if (!pageToken) break;
-  }
-  setQbankListCache(qbanks);
-  return qbanks;
-}
-
-// Shared access bundle: caller profile + visible bank ids. Single source of
-// truth for bootstrap_access AND get_questions?includeAccess=1 so the two
-// can never diverge (batched piggyback must equal the standalone call).
-function buildAccessBundle(
-  profile: { country: string; grants: string[] },
-  allBanks: QbankListEntry[],
-): { profileCountry: string; mainIds: string[]; prepIds: string[]; grants: string[]; legacy: boolean } {
-  const country = profile.country;
-  const grants = profile.grants;
-  // Legacy/admin accounts have no country on file -> full access
-  // (gating only applies to accounts created AFTER country selection)
-  const legacy = !country;
-  const bankCountry = (b: { country: string }) => String(b.country || "global").toLowerCase();
-  const mainIds = legacy
-    ? allBanks.filter(b => b.kind !== "exam_prep").map(b => b.id)
-    : allBanks.filter(b => b.kind !== "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
-  const prepIds = legacy
-    ? allBanks.filter(b => b.kind === "exam_prep").map(b => b.id)
-    : allBanks.filter(b => b.kind === "exam_prep" && (bankCountry(b) === country || grants.includes(b.id))).map(b => b.id);
-  return { profileCountry: country, mainIds, prepIds, grants, legacy };
-}
-
-const DRM_KEY_STR = process.env.DRM_KEY || "8f7e6d5c4b3a29108f7e6d5c4b3a2910";
 // Exam-prep list: static-ish admin content. 5-min shared cache avoids a full
 // collection scan (N reads) on every call.
 let examPrepCache: { items: any[]; exp: number } | null = null;
@@ -244,20 +46,8 @@ function setCachedStudyConcept(key: string, data: { studyConcept: string | null;
   }
   studyConceptCache.set(key, { data, exp: Date.now() + STUDY_CONCEPT_TTL_MS });
 }
-async function encryptDRM(text: string) {
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(DRM_KEY_STR);
-  const key = await crypto.subtle.importKey("raw", keyData, { name: "AES-GCM" }, false, ["encrypt"]);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = encoder.encode(text);
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
-  const combined = new Uint8Array(iv.length + encrypted.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(encrypted), iv.length);
-  let binary = '';
-  for (let i = 0; i < combined.byteLength; i++) binary += String.fromCharCode(combined[i]);
-  return btoa(binary);
-}
+// NOTE: no global DRM key. Bulk payloads use encryptForBank() (per-bank key,
+// env-only). See src/lib/qbank-drm.server.ts + POST /api/qbank_key.
 
 function json(body: unknown, status: number, cors: Record<string, string>) {
   const store = dbStats.getStore();
@@ -330,26 +120,31 @@ export const Route = createFileRoute("/api/qbank")({
           if (!userLimit.ok) return rateLimitResponse(userLimit.retryAfter, cors);
 
           if (action === "list_categories") {
-            // Version-aware cache: the list lives in memory until an admin
-            // publish bumps a bank's `updatedAt` (which invalidates it).
-            // Clients send their known maxUpdatedAt as `?v=`; a match means
-            // "unchanged" with ZERO Firestore reads.
+            // Version-aware + ACCESS-FILTERED cache. The full list lives in
+            // memory until an admin publish bumps `updatedAt`; filtering to
+            // the caller's bundle happens in-memory (0 extra reads) so we
+            // never leak all 12 bank IDs to everyone. Clients send their
+            // known maxUpdatedAt as `?v=`; a match against THEIR visible max
+            // means "unchanged" with ZERO Firestore reads.
             const clientV = parseInt(urlObj.searchParams.get("v") || "0", 10) || 0;
             try {
-              const cached = getQbankListCache();
-              if (cached) {
-                if (clientV && clientV === cached.maxUpdatedAt) {
-                  return json({ unchanged: true, maxUpdatedAt: cached.maxUpdatedAt }, 200, cors);
+              const bundle = await getAccessBundleCached(sa, token, uid);
+              const respond = (banks: QbankListEntry[], cached: boolean) => {
+                const visible = filterBanksForBundle(banks, bundle);
+                let maxUpdatedAt = 0;
+                for (const b of visible) {
+                  const vNum = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : 0;
+                  if (vNum > maxUpdatedAt) maxUpdatedAt = vNum;
                 }
-                return json({ qbanks: cached.banks, maxUpdatedAt: cached.maxUpdatedAt, cached: true }, 200, cors);
-              }
+                if (clientV && clientV === maxUpdatedAt) {
+                  return json({ unchanged: true, maxUpdatedAt }, 200, cors);
+                }
+                return json({ qbanks: visible, maxUpdatedAt, cached }, 200, cors);
+              };
+              const cached = getQbankListCache();
+              if (cached) return respond(cached.banks, true);
               const qbanks = await loadAllBanks(sa, token);
-              const fresh = getQbankListCache();
-              const maxUpdatedAt = fresh ? fresh.maxUpdatedAt : 0;
-              if (clientV && clientV === maxUpdatedAt) {
-                return json({ unchanged: true, maxUpdatedAt }, 200, cors);
-              }
-              return json({ qbanks, maxUpdatedAt }, 200, cors);
+              return respond(qbanks, false);
             } catch {
               return json({ error: "Failed to load qbanks" }, 500, cors);
             }
@@ -478,15 +273,14 @@ export const Route = createFileRoute("/api/qbank")({
             // Returns the caller's profile country, the main qbanks of that
             // country, the exam-prep sub-banks of that country, plus any
             // individually granted banks (admin-approved requests).
-            // Profile is cached 60s per user; bank metadata comes from the
-            // shared publish-invalidated list cache (0 reads when warm).
-            const { country, grants } = await loadUserProfile(sa, token, uid);
-
-            // Load all banks (metadata). Degrade to empty lists (not 500)
-            // if the bank listing is unreachable — same as before caching.
-            const allBanks = await loadAllBanks(sa, token).catch(() => []);
-
-            return json(buildAccessBundle({ country, grants }, allBanks), 200, cors);
+            // Bundle is cached 1h per user (KV-style); bank metadata comes
+            // from the shared publish-invalidated list cache (0 reads warm).
+            try {
+              const bundle = await getAccessBundleCached(sa, token, uid);
+              return json(bundle, 200, cors);
+            } catch {
+              return json({ profileCountry: "", mainIds: [], prepIds: [], grants: [], legacy: true }, 200, cors);
+            }
           }
 
           if (action === "my_access_requests") {
@@ -614,15 +408,13 @@ export const Route = createFileRoute("/api/qbank")({
             }
 
             // Batched access bundle (?includeAccess=1): lets the client skip
-            // the standalone bootstrap_access roundtrip. The profile is
-            // already loaded for the check above and bank metadata comes
-            // from the shared list cache, so this costs 0 extra Firestore
-            // reads when warm.
+            // the standalone bootstrap_access roundtrip. The bundle is
+            // already resolved for the check above (1h cache, 0 extra reads
+            // when warm).
             let accessBundle: ReturnType<typeof buildAccessBundle> | null = null;
             if (urlObj.searchParams.get("includeAccess") === "1" || urlObj.searchParams.get("includeAccess") === "true") {
               try {
-                const allBanks = await loadAllBanks(sa, token).catch(() => []);
-                accessBundle = buildAccessBundle(access.profile, allBanks);
+                accessBundle = access.bundle || await getAccessBundleCached(sa, token, uid);
               } catch { /* progress still returns, just without the bundle */ }
             }
 
@@ -771,12 +563,44 @@ export const Route = createFileRoute("/api/qbank")({
             }
 
             if (!onlyProgress && questions.length > 0) {
-              const questionsJson = JSON.stringify(questions);
-              const encryptedQuestions = await encryptDRM(questionsJson);
-              return json({ encryptedQuestions, progress: progressMap, ...(accessBundle ? { access: accessBundle } : {}) }, 200, cors);
+              // Stems-only + per-bank key (same contract as /api/qbank_static).
+              const { stems } = splitQuestionsForStatic(questions);
+              const bankCountry = access.meta?.country || "global";
+              try {
+                const encryptedQuestions = await encryptForBank(JSON.stringify(stems), qbankId, bankCountry);
+                return json({ encryptedQuestions, answersSplit: true, progress: progressMap, ...(accessBundle ? { access: accessBundle } : {}) }, 200, cors);
+              } catch (e: any) {
+                console.error("[get_questions] DRM key missing:", e?.message);
+                return json({ error: "Server misconfigured" }, 500, cors);
+              }
             }
 
             return json({ questions, progress: progressMap, ...(accessBundle ? { access: accessBundle } : {}) }, 200, cors);
+          }
+
+          if (action === "get_answers") {
+            // On-demand answer slice for stems-only clients. Served from the
+            // bank's private R2 chunks via a 5-min in-memory answer map: 0
+            // Firestore reads on the hot path (or 0 reads + 1 R2 GET on map
+            // build). Firestore single-doc reads happen ONLY for ids missing
+            // from R2 (legacy banks / brand-new questions). Still strictly
+            // rate-limited so bulk-scraping 37k answers takes thousands of
+            // throttled calls instead of 1 download.
+            const qbankId = urlObj.searchParams.get("qbankId");
+            const rawIds = urlObj.searchParams.get("ids") || "";
+            if (!qbankId) return json({ error: "Missing qbankId" }, 400, cors);
+            if (!/^[a-zA-Z0-9_-]+$/.test(qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
+            const ids = rawIds.split(",").map((s) => s.trim()).filter((s) => /^[a-zA-Z0-9_-]{1,64}$/.test(s));
+            if (ids.length === 0) return json({ error: "Missing ids" }, 400, cors);
+            if (ids.length > 50) return json({ error: "Too many ids (max 50)" }, 400, cors);
+            const uniq = [...new Set(ids)].slice(0, 50);
+            const ansLimit = rateLimit(`qbank-answers:${uid}`, 60_000, 60);
+            if (!ansLimit.ok) return rateLimitResponse(ansLimit.retryAfter, cors);
+            const access = await resolveBankAccess(sa, token, uid, qbankId);
+            if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);
+            const { getBulkAnswers } = await import("@/lib/qbank-answers.server");
+            const answers = await getBulkAnswers(sa, token, qbankId, uniq, access.meta?.storage_provider);
+            return json({ answers }, 200, cors);
           }
 
           if (action === "get_study_concept") {
@@ -784,20 +608,53 @@ export const Route = createFileRoute("/api/qbank")({
             const questionId = urlObj.searchParams.get("questionId");
             if (!qbankId || !questionId) return json({ error: "Missing ids" }, 400, cors);
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId) || !/^[a-zA-Z0-9_-]+$/.test(questionId)) return json({ error: "Invalid ids" }, 400, cors);
+            const wantLang = /^[a-zA-Z-]{2,8}$/.test(urlObj.searchParams.get("lang") || "")
+              ? urlObj.searchParams.get("lang")!.slice(0, 8)
+              : "";
+            const access = await resolveBankAccess(sa, token, uid, qbankId);
+            if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);
 
-            const cacheKey = `${qbankId}/${questionId}`;
+            const cacheKey = `${qbankId}/${questionId}/${wantLang}`;
             const hit = getCachedStudyConcept(cacheKey);
             if (hit) return json({ ...hit, cached: true }, 200, cors);
+
+            // Concepts are generated once per (question, lang) and shared by
+            // all students. Serve from the R2 snapshot: 0 Firestore reads hot.
+            try {
+              const { getConceptForQuestion } = await import("@/lib/qbank-answers.server");
+              const fromR2 = await getConceptForQuestion(qbankId, questionId, wantLang);
+              if (fromR2) {
+                setCachedStudyConcept(cacheKey, fromR2);
+                return json({ ...fromR2, cachedR2: true }, 200, cors);
+              }
+            } catch { /* fall through to Firestore */ }
 
             const r = await fetch(
               `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/questions/${questionId}`,
               { headers: { Authorization: `Bearer ${token}` } }
             );
-            
+
             if (!r.ok) return json({ studyConcept: null, studyConceptLang: null }, 200, cors);
             const doc = await r.json();
-            const studyConcept = doc.fields?.studyConcept?.stringValue || null;
-            const studyConceptLang = doc.fields?.studyConceptLang?.stringValue || null;
+            const fields = doc.fields || {};
+            // Per-lang map first (written by save_study_concept, no clobber),
+            // legacy single fields as fallback.
+            const langMap = fields.studyConcepts?.mapValue?.fields || {};
+            let studyConcept: string | null = null;
+            let studyConceptLang: string | null = null;
+            if (wantLang && langMap[wantLang]?.stringValue) {
+              studyConcept = langMap[wantLang].stringValue;
+              studyConceptLang = wantLang;
+            } else if (fields.studyConcept?.stringValue) {
+              studyConcept = fields.studyConcept.stringValue;
+              studyConceptLang = fields.studyConceptLang?.stringValue || null;
+            } else {
+              const firstLang = Object.keys(langMap)[0];
+              if (firstLang && langMap[firstLang]?.stringValue) {
+                studyConcept = langMap[firstLang].stringValue;
+                studyConceptLang = firstLang;
+              }
+            }
             // Only cache when a concept exists; misses stay uncached so a
             // just-generated concept is visible immediately.
             if (studyConcept) setCachedStudyConcept(cacheKey, { studyConcept, studyConceptLang });
@@ -1274,20 +1131,25 @@ export const Route = createFileRoute("/api/qbank")({
             const { qbankId, questionId, studyConcept } = body;
             if (!qbankId || !questionId || !studyConcept) return json({ error: "Missing fields" }, 400, cors);
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId) || !/^[a-zA-Z0-9_-]+$/.test(questionId)) return json({ error: "Invalid ids" }, 400, cors);
+            const access = await resolveBankAccess(sa, token, uid, qbankId);
+            if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);
             // Generation language tag so future readers get content in
             // their own language instead of a stale English copy.
             const conceptLang = typeof body.lang === "string" && /^[a-zA-Z-]{2,8}$/.test(body.lang)
-              ? body.lang.slice(0, 8) : null;
+              ? body.lang.slice(0, 8) : "en";
 
-            const mask = conceptLang
-              ? "updateMask.fieldPaths=studyConcept&updateMask.fieldPaths=studyConceptLang"
-              : "updateMask.fieldPaths=studyConcept";
+            // Per-lang map merge: generating in Arabic must NEVER clobber the
+            // French concept (the old single-field overwrite did exactly
+            // that, causing regen churn). One write, one (question, lang)
+            // forever, shared by all future students.
+            const mask = `updateMask.fieldPaths=${encodeURIComponent(`studyConcepts.${conceptLang}`)}&updateMask.fieldPaths=studyConcept&updateMask.fieldPaths=studyConceptLang`;
             const docUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/questions/${questionId}?${mask}`;
 
             const fields: Record<string, unknown> = {
-              studyConcept: { stringValue: String(studyConcept) }
+              studyConcepts: { mapValue: { fields: { [conceptLang]: { stringValue: String(studyConcept) } } } },
+              studyConcept: { stringValue: String(studyConcept) },
+              studyConceptLang: { stringValue: conceptLang },
             };
-            if (conceptLang) fields.studyConceptLang = { stringValue: conceptLang };
 
             const patchRes = await fetch(docUrl, {
               method: "PATCH",
@@ -1300,15 +1162,15 @@ export const Route = createFileRoute("/api/qbank")({
               console.error("Save study concept failed", errTxt);
               return json({ error: "Failed to save study concept" }, 500, cors);
             }
-            setCachedStudyConcept(`${qbankId}/${questionId}`, { studyConcept: String(studyConcept), studyConceptLang: conceptLang });
-            // Concepts digest for 1-read exports: upsert this question's entry
-            // into qbanks/{bank}/library/concepts (map key = question id, so
-            // concurrent saves for different questions never clobber each
-            // other and re-saves overwrite their own key). Best-effort — a
-            // digest failure must never fail the concept save itself.
+            setCachedStudyConcept(`${qbankId}/${questionId}/${conceptLang}`, { studyConcept: String(studyConcept), studyConceptLang: conceptLang });
+            // Concepts digest for 1-read exports: upsert this (question, lang)
+            // entry (map key includes lang, so per-lang concepts coexist and
+            // re-saves overwrite their own key). Best-effort — a digest
+            // failure must never fail the concept save itself.
             // Client sends code/subject/chapter it already holds (0 extra reads).
             try {
-              const entryMask = `updateMask.fieldPaths=${encodeURIComponent(`entries.${questionId}`)}&updateMask.fieldPaths=updatedAt`;
+              const digestKey = `${questionId}__${conceptLang}`;
+              const entryMask = `updateMask.fieldPaths=${encodeURIComponent(`entries.${digestKey}`)}&updateMask.fieldPaths=updatedAt`;
               const digestUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/qbanks/${qbankId}/library/concepts?${entryMask}`;
               const entryFields: Record<string, unknown> = {
                 code: { stringValue: String(body.code || "").slice(0, 24) },
@@ -1322,7 +1184,7 @@ export const Route = createFileRoute("/api/qbank")({
                 headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
                 body: JSON.stringify({
                   fields: {
-                    entries: { mapValue: { fields: { [questionId]: { mapValue: { fields: entryFields } } } } },
+                    entries: { mapValue: { fields: { [digestKey]: { mapValue: { fields: entryFields } } } } },
                     updatedAt: { integerValue: String(Date.now()) },
                   },
                 }),
@@ -1333,6 +1195,64 @@ export const Route = createFileRoute("/api/qbank")({
             return json({ ok: true }, 200, cors);
           }
           
+          if (body.action === "batch_log_peer_votes") {
+            // DISABLED for now: peer stats fully off (0 reads + 0 writes).
+            // Early return BEFORE any Firestore touch, so even stale cached
+            // clients (v26-v29) that still flush their IDB outbox can't
+            // write. Re-enable by setting PEER_STATS_WRITE_ENABLED = true.
+            const PEER_STATS_WRITE_ENABLED = false;
+            if (!PEER_STATS_WRITE_ENABLED) {
+              return json({ ok: true, counted: 0, disabled: true }, 200, cors);
+            }
+            // Batched peer-stat votes from the client's IDB outbox (≤50).
+            // Blind increment transforms in ONE commit: no reads, atomic per
+            // doc, contention-proof (the old client read-modify-write lost
+            // votes under concurrency AND cost 1r+1w per answer). Billed =
+            // 1 write per voted question, amortized over the whole batch.
+            // Uniqueness is enforced client-side (session + outbox + users-map
+            // precheck); the server only bounds volume + shape. Server never
+            // grows the users map (unbounded array/map growth would hit the
+            // 1MB doc cap); threshold/display math uses `total` instead.
+            const votes = (body as any).votes;
+            if (!Array.isArray(votes) || votes.length === 0) return json({ ok: true, counted: 0 }, 200, cors);
+            if (votes.length > 50) return json({ error: "Too many votes (max 50)" }, 400, cors);
+            const batchLimit = rateLimit(`qbank-peer-batch:${uid}`, 60_000, 10);
+            if (!batchLimit.ok) return rateLimitResponse(batchLimit.retryAfter, cors);
+            const clean: Array<{ qid: string; idx: number }> = [];
+            const seen = new Set<string>();
+            for (const v of votes) {
+              const qid = String((v as any)?.questionId || "");
+              const idx = Number((v as any)?.selectedIndex);
+              if (!/^[a-zA-Z0-9_-]{1,64}$/.test(qid)) continue;
+              if (!Number.isInteger(idx) || idx < 0 || idx > 9) continue;
+              if (seen.has(qid)) continue; // first vote per question wins
+              seen.add(qid);
+              clean.push({ qid, idx });
+            }
+            if (clean.length === 0) return json({ ok: true, counted: 0 }, 200, cors);
+            const writes: any[] = clean.map(({ qid, idx }) => ({
+              transform: {
+                document: `projects/${sa.project_id}/databases/(default)/documents/questionStats/${qid}`,
+                fieldTransforms: [
+                  { fieldPath: `userCounts.${idx}`, increment: { integerValue: "1" } },
+                  { fieldPath: "total", increment: { integerValue: "1" } },
+                  { fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" },
+                ],
+              },
+            }));
+            const commitUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents:commit`;
+            const commitRes = await fetch(commitUrl, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ writes }),
+            });
+            if (!commitRes.ok) {
+              console.error("[batch_log_peer_votes] commit failed", commitRes.status, await commitRes.text().catch(() => ""));
+              return json({ error: "Failed to log votes" }, 500, cors);
+            }
+            return json({ ok: true, counted: clean.length }, 200, cors);
+          }
+
           return json({ error: "Invalid POST action" }, 400, cors);
         } catch (e) {
           console.error("[qbank POST]", (e as Error).message);

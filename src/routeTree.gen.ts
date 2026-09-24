@@ -21,7 +21,9 @@ import { Route as ApiAdminRouteImport } from './routes/api/admin'
 import { Route as ApiAiRouteImport } from './routes/api/ai'
 import { Route as ApiKashierRouteImport } from './routes/api/kashier'
 import { Route as ApiNotificationsRouteImport } from './routes/api/notifications'
+import { Route as ApiPeerStatsRouteImport } from './routes/api/peer-stats'
 import { Route as ApiQbankRouteImport } from './routes/api/qbank'
+import { Route as ApiQbank_keyRouteImport } from './routes/api/qbank_key'
 import { Route as ApiQbank_staticRouteImport } from './routes/api/qbank_static'
 import { Route as ApiSupportRouteImport } from './routes/api/support'
 import { Route as QbanksEgyptRouteImport } from './routes/qbanks/egypt'
@@ -95,9 +97,19 @@ const ApiNotificationsRoute = ApiNotificationsRouteImport.update({
   path: '/api/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPeerStatsRoute = ApiPeerStatsRouteImport.update({
+  id: '/api/peer-stats',
+  path: '/api/peer-stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiQbankRoute = ApiQbankRouteImport.update({
   id: '/api/qbank',
   path: '/api/qbank',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiQbank_keyRoute = ApiQbank_keyRouteImport.update({
+  id: '/api/qbank_key',
+  path: '/api/qbank_key',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiQbank_staticRoute = ApiQbank_staticRouteImport.update({
@@ -176,7 +188,9 @@ export interface FileRoutesByFullPath {
   '/api/ai': typeof ApiAiRoute
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
+  '/api/peer-stats': typeof ApiPeerStatsRoute
   '/api/qbank': typeof ApiQbankRoute
+  '/api/qbank_key': typeof ApiQbank_keyRoute
   '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
   '/qbanks/egypt': typeof QbanksEgyptRoute
@@ -203,7 +217,9 @@ export interface FileRoutesByTo {
   '/api/ai': typeof ApiAiRoute
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
+  '/api/peer-stats': typeof ApiPeerStatsRoute
   '/api/qbank': typeof ApiQbankRoute
+  '/api/qbank_key': typeof ApiQbank_keyRoute
   '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
   '/qbanks/egypt': typeof QbanksEgyptRoute
@@ -231,7 +247,9 @@ export interface FileRoutesById {
   '/api/ai': typeof ApiAiRoute
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
+  '/api/peer-stats': typeof ApiPeerStatsRoute
   '/api/qbank': typeof ApiQbankRoute
+  '/api/qbank_key': typeof ApiQbank_keyRoute
   '/api/qbank_static': typeof ApiQbank_staticRoute
   '/api/support': typeof ApiSupportRoute
   '/qbanks/egypt': typeof QbanksEgyptRoute
@@ -260,7 +278,9 @@ export interface FileRouteTypes {
     | '/api/ai'
     | '/api/kashier'
     | '/api/notifications'
+    | '/api/peer-stats'
     | '/api/qbank'
+    | '/api/qbank_key'
     | '/api/qbank_static'
     | '/api/support'
     | '/qbanks/egypt'
@@ -287,7 +307,9 @@ export interface FileRouteTypes {
     | '/api/ai'
     | '/api/kashier'
     | '/api/notifications'
+    | '/api/peer-stats'
     | '/api/qbank'
+    | '/api/qbank_key'
     | '/api/qbank_static'
     | '/api/support'
     | '/qbanks/egypt'
@@ -314,7 +336,9 @@ export interface FileRouteTypes {
     | '/api/ai'
     | '/api/kashier'
     | '/api/notifications'
+    | '/api/peer-stats'
     | '/api/qbank'
+    | '/api/qbank_key'
     | '/api/qbank_static'
     | '/api/support'
     | '/qbanks/egypt'
@@ -342,7 +366,9 @@ export interface RootRouteChildren {
   ApiAiRoute: typeof ApiAiRoute
   ApiKashierRoute: typeof ApiKashierRoute
   ApiNotificationsRoute: typeof ApiNotificationsRoute
+  ApiPeerStatsRoute: typeof ApiPeerStatsRoute
   ApiQbankRoute: typeof ApiQbankRoute
+  ApiQbank_keyRoute: typeof ApiQbank_keyRoute
   ApiQbank_staticRoute: typeof ApiQbank_staticRoute
   ApiSupportRoute: typeof ApiSupportRoute
   QbanksEgyptRoute: typeof QbanksEgyptRoute
@@ -443,11 +469,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiNotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/peer-stats': {
+      id: '/api/peer-stats'
+      path: '/api/peer-stats'
+      fullPath: '/api/peer-stats'
+      preLoaderRoute: typeof ApiPeerStatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/qbank': {
       id: '/api/qbank'
       path: '/api/qbank'
       fullPath: '/api/qbank'
       preLoaderRoute: typeof ApiQbankRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/qbank_key': {
+      id: '/api/qbank_key'
+      path: '/api/qbank_key'
+      fullPath: '/api/qbank_key'
+      preLoaderRoute: typeof ApiQbank_keyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/qbank_static': {
@@ -550,7 +590,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAiRoute: ApiAiRoute,
   ApiKashierRoute: ApiKashierRoute,
   ApiNotificationsRoute: ApiNotificationsRoute,
+  ApiPeerStatsRoute: ApiPeerStatsRoute,
   ApiQbankRoute: ApiQbankRoute,
+  ApiQbank_keyRoute: ApiQbank_keyRoute,
   ApiQbank_staticRoute: ApiQbank_staticRoute,
   ApiSupportRoute: ApiSupportRoute,
   QbanksEgyptRoute: QbanksEgyptRoute,

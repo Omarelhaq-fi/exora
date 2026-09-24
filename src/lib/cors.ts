@@ -43,7 +43,7 @@ export function getCorsHeaders(
   const allowed = isAllowedOrigin(origin);
   const h: Record<string, string> = {
     "access-control-allow-methods": opts.methods || "GET, POST, OPTIONS",
-    "access-control-allow-headers": opts.headers || "content-type, authorization",
+    "access-control-allow-headers": opts.headers || "content-type, authorization, x-firebase-appcheck",
     "access-control-max-age": "86400",
     "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
     "pragma": "no-cache",

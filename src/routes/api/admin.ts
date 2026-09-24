@@ -164,8 +164,7 @@ async function fsPatch(path: string, patch: Record<string, string | number | Dat
   touchQbankListCache(path);
 }
 
-async function fsSetMerge(path: string, fields: Record<string, FSValue>) {
-  const sa = getServiceAccount();
+async function fsSetMerge(path: string, fields: Record<string, FSValue>) {  const sa = getServiceAccount();
   const token = await getGoogleAccessToken();
   const mask = Object.keys(fields)
     .map((f) => `updateMask.fieldPaths=${encodeURIComponent(f)}`)
@@ -178,6 +177,28 @@ async function fsSetMerge(path: string, fields: Record<string, FSValue>) {
   });
   if (!resp.ok) throw new Error(`Firestore set failed: ${resp.status}`);
   touchQbankListCache(path);
+}
+
+// Concepts embedded into R2 chunk objects at publish time (per-lang map +
+// legacy single fields). Served from R2 at 0 reads via get_study_concept's
+// R2 map; stripped from client stems at serve time so downloads stay lean.
+// Attached only when present — questions without concepts stay untouched.
+function extractChunkConcepts(doc: any): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  try {
+    const mapFields = doc.fields?.studyConcepts?.mapValue?.fields || {};
+    const langs: Record<string, string> = {};
+    for (const [k, v] of Object.entries(mapFields)) {
+      const s = (v as any)?.stringValue;
+      if (typeof s === "string" && s) langs[k] = s;
+    }
+    if (Object.keys(langs).length > 0) out.studyConcepts = langs;
+    const legacy = doc.fields?.studyConcept?.stringValue;
+    if (typeof legacy === "string" && legacy) out.studyConcept = legacy;
+    const legacyLang = doc.fields?.studyConceptLang?.stringValue;
+    if (typeof legacyLang === "string" && legacyLang) out.studyConceptLang = legacyLang;
+  } catch { /* concepts are best-effort at publish */ }
+  return out;
 }
 
 // Rebuilds the single sys/qbank_index document so that list_categories costs
@@ -1357,7 +1378,7 @@ export const Route = createFileRoute("/api/admin")({
               const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
               if (!resp.ok && resp.status !== 404) return json({ error: `Firestore fetch failed: ${resp.status}` }, 500, cors);
               if (resp.status === 404) break;
-              
+
               const data = await resp.json();
               if (data.documents) {
                 for (const doc of data.documents) {
@@ -1366,7 +1387,10 @@ export const Route = createFileRoute("/api/admin")({
                   const dataStr = doc.fields?.data?.stringValue;
                   if (dataStr) {
                     try {
-                      questions.push({ id, text, data: JSON.parse(dataStr) });
+                      // Concepts ride along in the R2 snapshot (0-read serving
+                      // via get_study_concept's R2 map). Stripped from client
+                      // stems at serve time so downloads stay lean.
+                      questions.push({ id, text, data: JSON.parse(dataStr), ...extractChunkConcepts(doc) });
                     } catch (e) {}
                   }
                 }
@@ -1939,7 +1963,7 @@ Text to process:\n${body.rawText}`
                     const text = doc.fields?.questionText?.stringValue || "";
                     const dataStr = doc.fields?.data?.stringValue;
                     if (dataStr) {
-                      try { remaining.push({ id, text, data: JSON.parse(dataStr) }); } catch {}
+                      try { remaining.push({ id, text, data: JSON.parse(dataStr), ...extractChunkConcepts(doc) }); } catch {}
                     }
                   }
                 }
