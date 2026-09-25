@@ -47,6 +47,120 @@ function setCachedStudyConcept(key: string, data: { studyConcept: string | null;
 // NOTE: no global DRM key. Bulk payloads use encryptForBank() (per-bank key,
 // env-only). See src/lib/qbank-drm.server.ts + POST /api/qbank_key.
 
+// ---------- Global subject/category/bank answer counters ----------
+// Powers admin "most answered" leaderboards. Counter docs live in three
+// tiny collections; doc ids are base64url-encoded labels (reversible, and
+// `/`-free so they are always valid Firestore ids):
+//   stats_qbank_subjects/{b64(subject)}                 { answers }
+//   stats_qbank_chapters/{b64(subject\nchapter)}        { subject, chapter, answers }
+//   stats_qbank_banks/{bankId}                          { answers }
+// Increments are atomic server-side transforms, fired WITHOUT awaiting so
+// answer saves never slow down. Best-effort: failures only log.
+function cleanCounterLabel(v: unknown): string {
+  return String(v || "").trim().slice(0, 120);
+}
+function b64url(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const b64 = typeof btoa === "function"
+    ? btoa(bin)
+    : (globalThis as any).Buffer
+      ? (globalThis as any).Buffer.from(s, "utf8").toString("base64")
+      : "";
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function bumpSubjectCounters(
+  projectId: string,
+  token: string,
+  entries: Array<{ qbankId: string; subject: string; chapter: string }>,
+) {
+  try {
+    const usable = entries
+      .map((e) => ({
+        qbankId: String(e.qbankId || ""),
+        subject: cleanCounterLabel(e.subject) || "Uncategorized",
+        chapter: cleanCounterLabel(e.chapter),
+      }))
+      .filter((e) => e.qbankId);
+    if (!usable.length) return;
+    const bySubject = new Map<string, { n: number; subject: string }>();
+    const byChapter = new Map<string, { n: number; subject: string; chapter: string }>();
+    const byBank = new Map<string, number>();
+    for (const e of usable) {
+      const s = bySubject.get(e.subject);
+      if (s) s.n++;
+      else bySubject.set(e.subject, { n: 1, subject: e.subject });
+      byBank.set(e.qbankId, (byBank.get(e.qbankId) || 0) + 1);
+      if (e.chapter) {
+        const key = e.subject + "\n" + e.chapter;
+        const c = byChapter.get(key);
+        if (c) c.n++;
+        else byChapter.set(key, { n: 1, subject: e.subject, chapter: e.chapter });
+      }
+    }
+    const writes: any[] = [];
+    const base = `projects/${projectId}/databases/(default)/documents`;
+    // Every increment is paired with an `update` (labels / heartbeat) so the
+    // doc is guaranteed to exist even if a transform-only write would not
+    // create it. Labels are last-writer-wins; counts stay exact (transforms).
+    const nowIso = new Date().toISOString();
+    for (const [subject, v] of bySubject) {
+      const doc = `${base}/stats_qbank_subjects/${b64url(subject)}`;
+      writes.push({
+        update: { name: doc, fields: { name: { stringValue: v.subject } } },
+        updateMask: { fieldPaths: ["name"] },
+      });
+      writes.push({
+        transform: {
+          document: doc,
+          fieldTransforms: [{ fieldPath: "answers", increment: { integerValue: String(v.n) } }],
+        },
+      });
+    }
+    for (const [key, v] of byChapter) {
+      const doc = `${base}/stats_qbank_chapters/${b64url(key)}`;
+      writes.push({
+        update: {
+          name: doc,
+          fields: {
+            subject: { stringValue: v.subject },
+            chapter: { stringValue: v.chapter },
+          },
+        },
+        updateMask: { fieldPaths: ["subject", "chapter"] },
+      });
+      writes.push({
+        transform: {
+          document: doc,
+          fieldTransforms: [{ fieldPath: "answers", increment: { integerValue: String(v.n) } }],
+        },
+      });
+    }
+    for (const [bankId, n] of byBank) {
+      const doc = `${base}/stats_qbank_banks/${bankId}`;
+      writes.push({
+        update: { name: doc, fields: { lastAnswerAt: { timestampValue: nowIso } } },
+        updateMask: { fieldPaths: ["lastAnswerAt"] },
+      });
+      writes.push({
+        transform: {
+          document: doc,
+          fieldTransforms: [{ fieldPath: "answers", increment: { integerValue: String(n) } }],
+        },
+      });
+    }
+    if (!writes.length) return;
+    fetch(`${base}:commit`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ writes }),
+    }).catch((e) => console.warn("[subject-counters] commit failed:", (e as Error)?.message || e));
+  } catch (e) {
+    console.warn("[subject-counters]", (e as Error)?.message || e);
+  }
+}
+
 function json(body: unknown, status: number, cors: Record<string, string>) {
   const store = dbStats.getStore();
   return new Response(JSON.stringify(body), {
@@ -699,7 +813,8 @@ export const Route = createFileRoute("/api/qbank")({
             
             let incrementAnswerCount = 0;
             const qbankUpdates: Record<string, { paths: Set<string>, progressFields: any }> = {};
-            
+            const counterEntries: Array<{ qbankId: string; subject: string; chapter: string }> = [];
+
             for (const u of updates) {
                if (!/^[a-zA-Z0-9_-]+$/.test(u.qbankId) || !/^[a-zA-Z0-9_-]+$/.test(u.questionId)) {
                   throw new Error("Invalid identifiers");
@@ -707,16 +822,22 @@ export const Route = createFileRoute("/api/qbank")({
                if (!qbankUpdates[u.qbankId]) {
                    qbankUpdates[u.qbankId] = { paths: new Set<string>(), progressFields: {} };
                }
-               
+
                let qField: any = {};
                if (qbankUpdates[u.qbankId].progressFields[u.questionId]) {
                    qField = qbankUpdates[u.qbankId].progressFields[u.questionId].mapValue.fields;
                }
-               
-               if (u.correct !== undefined) { 
-                   qField.correct = { booleanValue: !!u.correct }; 
+
+               const uSubject = cleanCounterLabel((u as any).subject);
+               const uChapter = cleanCounterLabel((u as any).chapter);
+
+               if (u.correct !== undefined) {
+                   qField.correct = { booleanValue: !!u.correct };
                    incrementAnswerCount++;
+                   if (uSubject) counterEntries.push({ qbankId: u.qbankId, subject: uSubject, chapter: uChapter });
                }
+               if (uSubject) qField.subject = { stringValue: uSubject };
+               if (uChapter) qField.chapter = { stringValue: uChapter };
                if (u.timeTakenMs !== undefined) { qField.timeTakenMs = { integerValue: String(u.timeTakenMs) }; }
                if (u.marked !== undefined) { qField.marked = { booleanValue: !!u.marked }; }
                if (u.note !== undefined) { qField.note = { stringValue: String(u.note) }; }
@@ -728,6 +849,8 @@ export const Route = createFileRoute("/api/qbank")({
                if (u.timeTakenMs !== undefined) qbankUpdates[u.qbankId].paths.add(`progress.\`${u.questionId}\`.timeTakenMs`);
                if (u.marked !== undefined) qbankUpdates[u.qbankId].paths.add(`progress.\`${u.questionId}\`.marked`);
                if (u.note !== undefined) qbankUpdates[u.qbankId].paths.add(`progress.\`${u.questionId}\`.note`);
+               if (qField.subject) qbankUpdates[u.qbankId].paths.add(`progress.\`${u.questionId}\`.subject`);
+               if (qField.chapter) qbankUpdates[u.qbankId].paths.add(`progress.\`${u.questionId}\`.chapter`);
                qbankUpdates[u.qbankId].paths.add(`progress.\`${u.questionId}\`.timestamp`);
             }
 
@@ -772,13 +895,18 @@ export const Route = createFileRoute("/api/qbank")({
               console.error("Batch sync failed", errTxt);
               return json({ error: "Failed to sync progress: " + errTxt }, 500, cors);
             }
-            
+
+            // Global most-answered counters (never blocks the response).
+            if (counterEntries.length) bumpSubjectCounters(sa.project_id, token, counterEntries);
+
             return json({ ok: true }, 200, cors);
           }
 
           if (body.action === "save_progress") {
             const { qbankId, questionId, correct, timeTakenMs } = body;
-            
+            const spSubject = cleanCounterLabel((body as any).subject);
+            const spChapter = cleanCounterLabel((body as any).chapter);
+
             if (!qbankId || !questionId || typeof correct !== "boolean" || typeof timeTakenMs !== "number") {
               return json({ error: "Invalid payload" }, 400, cors);
             }
@@ -786,8 +914,18 @@ export const Route = createFileRoute("/api/qbank")({
                return json({ error: "Invalid identifiers" }, 400, cors);
             }
 
-            const docUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}/qbank_progress_blobs/${qbankId}?updateMask.fieldPaths=progress.${questionId}.correct&updateMask.fieldPaths=progress.${questionId}.timeTakenMs&updateMask.fieldPaths=progress.${questionId}.timestamp`;
-            
+            let spMask = `updateMask.fieldPaths=progress.${questionId}.correct&updateMask.fieldPaths=progress.${questionId}.timeTakenMs&updateMask.fieldPaths=progress.${questionId}.timestamp`;
+            if (spSubject) spMask += `&updateMask.fieldPaths=progress.${questionId}.subject`;
+            if (spChapter) spMask += `&updateMask.fieldPaths=progress.${questionId}.chapter`;
+            const docUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}/qbank_progress_blobs/${qbankId}?${spMask}`;
+
+            const spFields: Record<string, any> = {
+              correct: { booleanValue: correct },
+              timeTakenMs: { integerValue: String(timeTakenMs) },
+              timestamp: { timestampValue: new Date().toISOString() }
+            };
+            if (spSubject) spFields.subject = { stringValue: spSubject };
+            if (spChapter) spFields.chapter = { stringValue: spChapter };
             const patchRes = await fetch(docUrl, {
               method: "PATCH",
               headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -798,11 +936,7 @@ export const Route = createFileRoute("/api/qbank")({
                       fields: {
                         [questionId]: {
                           mapValue: {
-                            fields: {
-                              correct: { booleanValue: correct },
-                              timeTakenMs: { integerValue: String(timeTakenMs) },
-                              timestamp: { timestampValue: new Date().toISOString() }
-                            }
+                            fields: spFields
                           }
                         }
                       }
@@ -832,7 +966,8 @@ export const Route = createFileRoute("/api/qbank")({
                 }]
               })
             }).catch(e => console.error("Failed to increment answer count", e));
-            
+            if (spSubject) bumpSubjectCounters(sa.project_id, token, [{ qbankId, subject: spSubject, chapter: spChapter }]);
+
             return json({ ok: true }, 200, cors);
           }
           

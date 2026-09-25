@@ -22,6 +22,17 @@ export const Route = createFileRoute("/")({
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      // LCP hero image, preloaded in the right size (responsive WebP set).
+      {
+        rel: "preload",
+        as: "image",
+        href: "/images/optimized/hero-doctor-1280.webp",
+        imageSrcSet:
+          "/images/optimized/hero-doctor-768.webp 768w, /images/optimized/hero-doctor-1280.webp 1280w, /images/optimized/hero-doctor-1920.webp 1920w",
+        imageSizes: "100vw",
+        // @ts-expect-error fetchpriority is valid on preload links
+        fetchpriority: "high",
+      },
       {
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
@@ -69,11 +80,21 @@ const APP_URL = "/app/index.html";
 
 function CuraQMark({ size = 26 }: { size?: number }) {
   return (
-    <img
-      src="/app/assets/logo.png"
-      alt="CuraQ Logo"
-      style={{ width: size, height: size, borderRadius: "25%", objectFit: "cover" }}
-    />
+    <picture>
+      <source
+        type="image/webp"
+        srcSet="/images/optimized/logo-64.webp 64w, /images/optimized/logo-128.webp 128w"
+        sizes={`${Math.ceil(size * 2)}px`}
+      />
+      <img
+        src="/app/assets/logo.png"
+        alt="CuraQ Logo"
+        width={size}
+        height={size}
+        decoding="async"
+        style={{ width: size, height: size, borderRadius: "25%", objectFit: "cover" }}
+      />
+    </picture>
   );
 }
 
@@ -220,12 +241,23 @@ function Landing() {
       <main className="w-full bg-[#ffffff]">
         {/* HERO */}
         <section id="hero" className="relative w-full h-[100dvh] min-h-[600px] flex overflow-hidden">
-          <img
-            src="/images/hero-doctor.jpg"
-            alt=""
-            aria-hidden
-            className="absolute inset-0 w-full h-full object-cover object-[center_10%] scale-[1.15]"
-          />
+          <picture>
+            <source
+              type="image/webp"
+              srcSet="/images/optimized/hero-doctor-768.webp 768w, /images/optimized/hero-doctor-1280.webp 1280w, /images/optimized/hero-doctor-1920.webp 1920w"
+              sizes="100vw"
+            />
+            <img
+              src="/images/hero-doctor.jpg"
+              alt=""
+              aria-hidden
+              width={1920}
+              height={1280}
+              fetchPriority="high"
+              decoding="async"
+              className="absolute inset-0 w-full h-full object-cover object-[center_10%] scale-[1.15]"
+            />
+          </picture>
           <div className="absolute inset-0 bg-gradient-to-r from-black/60 to-black/20" />
           <div className="relative flex-1 w-full max-w-7xl mx-auto px-6 md:px-12 flex flex-col justify-center">
             <div className="max-w-2xl flex flex-col items-start gap-2 md:gap-4 mt-12 md:mt-24">
@@ -291,7 +323,14 @@ function Landing() {
         </section>
 
         <section className="w-full py-24 px-6 bg-[#0a3d4a] text-center text-white relative overflow-hidden">
-          <div className="absolute inset-0 bg-[url('/images/pattern.png')] opacity-5"></div>
+          <div
+            className="absolute inset-0 opacity-5"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 25% 25%, rgba(255,255,255,0.6) 1px, transparent 1px)",
+              backgroundSize: "22px 22px",
+            }}
+          ></div>
           <div className="max-w-4xl mx-auto">
             <h2 className="text-[28px] md:text-[36px] font-bold mb-6 tracking-tight">
               The CuraQ Difference
@@ -306,7 +345,22 @@ function Landing() {
         <section className="w-full py-24 px-6 bg-white">
           <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center gap-12">
             <div className="w-full md:w-1/2 rounded overflow-hidden">
-              <img src="/images/institutional_doctors_realistic.png" alt="Doctors collaborating" className="w-full h-auto object-cover max-h-[300px]" />
+              <picture>
+                <source
+                  type="image/webp"
+                  srcSet="/images/optimized/institutional-doctors-640.webp 640w, /images/optimized/institutional-doctors-960.webp 960w"
+                  sizes="(max-width: 768px) 100vw, 50vw"
+                />
+                <img
+                  src="/images/institutional_doctors_realistic.png"
+                  alt="Doctors collaborating"
+                  width={960}
+                  height={960}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-auto object-cover max-h-[300px]"
+                />
+              </picture>
             </div>
             <div className="w-full md:w-1/2 flex flex-col items-start text-left">
               <h2 className="text-[26px] md:text-[30px] font-light text-[#555555] mb-4">

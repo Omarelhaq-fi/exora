@@ -69,6 +69,7 @@ function json(body: unknown, status: number, cors: Record<string, string>) {
 type FSValue = {
   stringValue?: string;
   integerValue?: string;
+  doubleValue?: number | string;
   timestampValue?: string;
   nullValue?: null;
   booleanValue?: boolean;
@@ -548,8 +549,8 @@ function maintenanceToFSValue(m: { global: boolean; groups: Record<string, boole
 async function computeStatsOverview() {
   const sa = getServiceAccount();
   const token = await getGoogleAccessToken();
-  
-  let totalUsers = 0, totalDocs = 0, totalFlashcards = 0;
+
+  let totalUsers = 0, totalDocs = 0, totalFlashcards = 0, totalQbankAnswers = 0;
   try {
     const url = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index:runAggregationQuery`;
     const resp = await fetch(url, {
@@ -561,38 +562,45 @@ async function computeStatsOverview() {
           aggregations: [
             { count: {}, alias: "c" },
             { sum: { field: { fieldPath: "docCount" } }, alias: "d" },
-            { sum: { field: { fieldPath: "flashcardCount" } }, alias: "f" }
+            { sum: { field: { fieldPath: "flashcardCount" } }, alias: "f" },
+            { sum: { field: { fieldPath: "qbankAnswerCount" } }, alias: "q" }
           ]
         }
       })
     });
     if (resp.ok) {
       const data = await resp.json();
-      totalUsers = Number(data[0]?.result?.aggregateFields?.c?.integerValue || 0);
-      totalDocs = Number(data[0]?.result?.aggregateFields?.d?.integerValue || data[0]?.result?.aggregateFields?.d?.doubleValue || 0);
-      totalFlashcards = Number(data[0]?.result?.aggregateFields?.f?.integerValue || data[0]?.result?.aggregateFields?.f?.doubleValue || 0);
+      const agg = data[0]?.result?.aggregateFields || {};
+      const num = (v: any) => Number(v?.integerValue ?? v?.doubleValue ?? 0);
+      totalUsers = num(agg.c);
+      totalDocs = num(agg.d);
+      totalFlashcards = num(agg.f);
+      totalQbankAnswers = num(agg.q);
     }
   } catch(e) { console.error("[computeStatsOverview] aggregation error", e); }
 
   const now = Date.now();
-  const day = 86400_000;
-  
-  const getActiveCount = async (days: number) => {
+
+  // Active = lastActiveIso (heartbeat/clicks) OR lastSeenIso (AI use) within window.
+  // Old code only checked lastSeenIso, so heartbeat-only users were invisible.
+  const getActiveCount = async (windowMs: number) => {
     try {
-      const dateStr = new Date(now - days * day).toISOString();
+      const dateStr = new Date(now - windowMs).toISOString();
       const url = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index:runAggregationQuery`;
       const resp = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           structuredAggregationQuery: {
-            structuredQuery: { 
+            structuredQuery: {
               from: [{ collectionId: "users_index" }],
               where: {
-                fieldFilter: {
-                  field: { fieldPath: "lastSeenIso" },
-                  op: "GREATER_THAN_OR_EQUAL",
-                  value: { stringValue: dateStr }
+                compositeFilter: {
+                  op: "OR",
+                  filters: [
+                    { fieldFilter: { field: { fieldPath: "lastActiveIso" }, op: "GREATER_THAN_OR_EQUAL", value: { stringValue: dateStr } } },
+                    { fieldFilter: { field: { fieldPath: "lastSeenIso" }, op: "GREATER_THAN_OR_EQUAL", value: { stringValue: dateStr } } }
+                  ]
                 }
               }
             },
@@ -608,10 +616,12 @@ async function computeStatsOverview() {
     return 0;
   };
 
-  const [active24h, active7d, active30d] = await Promise.all([
-    getActiveCount(1),
-    getActiveCount(7),
-    getActiveCount(30)
+  const MIN = 60_000;
+  const [active30m, active24h, active7d, active30d] = await Promise.all([
+    getActiveCount(30 * MIN),
+    getActiveCount(24 * 60 * MIN),
+    getActiveCount(7 * 24 * 60 * MIN),
+    getActiveCount(30 * 24 * 60 * MIN)
   ]);
 
   const topUsers: any[] = [];
@@ -623,7 +633,7 @@ async function computeStatsOverview() {
       body: JSON.stringify({
         structuredQuery: {
           from: [{ collectionId: "users_index" }],
-          orderBy: [{ field: { fieldPath: "docCount" }, direction: "DESCENDING" }],
+          orderBy: [{ field: { fieldPath: "qbankAnswerCount" }, direction: "DESCENDING" }],
           limit: 10
         }
       })
@@ -638,8 +648,9 @@ async function computeStatsOverview() {
              uid,
              email: f.email?.stringValue || "",
              plan: f.plan?.stringValue || "free",
-             docCount: Number(f.docCount?.integerValue || 0),
              flashcardCount: Number(f.flashcardCount?.integerValue || 0),
+             qbankAnswerCount: Number(f.qbankAnswerCount?.integerValue || 0),
+             lastActiveIso: f.lastActiveIso?.stringValue || null,
              lastSeenIso: f.lastSeenIso?.stringValue || null,
            });
         }
@@ -649,11 +660,77 @@ async function computeStatsOverview() {
 
   return {
     totalUsers,
-    active24h, active7d, active30d,
+    active30m, active24h, active7d, active30d,
     totalDocs,
     totalFlashcards,
+    totalQbankAnswers,
     topUsers,
   };
+}
+
+// ---------- Most-answered QBank breakdown ----------
+// Reads the tiny global counter collections written on every answer by
+// /api/qbank (stats_qbank_subjects / _chapters / _banks). A few dozen docs
+// at most — 3 cheap reads, no per-user or per-question scans.
+async function computeQbankBreakdown() {
+  const sa = getServiceAccount();
+  const token = await getGoogleAccessToken();
+  const num = (v: any) => Number(v?.integerValue ?? v?.doubleValue ?? 0);
+
+  async function listAll(collection: string): Promise<Array<{ id: string; fields: Record<string, FSValue> }>> {
+    const out: Array<{ id: string; fields: Record<string, FSValue> }> = [];
+    let pageToken = "";
+    for (let page = 0; page < 10; page++) {
+      const params = new URLSearchParams({ pageSize: "300" });
+      if (pageToken) params.set("pageToken", pageToken);
+      const resp = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/${collection}?${params}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!resp.ok) break;
+      const data = await resp.json();
+      for (const d of data.documents || []) {
+        out.push({ id: String(d.name || "").split("/").pop() || "", fields: d.fields || {} });
+      }
+      pageToken = data.nextPageToken || "";
+      if (!pageToken) break;
+    }
+    return out;
+  }
+
+  const [subjectDocs, chapterDocs, bankDocs] = await Promise.all([
+    listAll("stats_qbank_subjects"),
+    listAll("stats_qbank_chapters"),
+    listAll("stats_qbank_banks"),
+  ]);
+
+  // Bank id -> display name (cached shared qbank list, best-effort).
+  const bankNames = new Map<string, string>();
+  try {
+    const { loadAllBanks } = await import("@/lib/qbank-access.server");
+    const banks = await loadAllBanks(sa, token);
+    for (const b of banks) bankNames.set((b as any).id, (b as any).name || (b as any).id);
+  } catch { /* names fall back to ids */ }
+
+  const subjects = subjectDocs
+    .map((d) => ({ name: d.fields.name?.stringValue || "(unnamed)", answers: num(d.fields.answers) }))
+    .filter((s) => s.answers > 0)
+    .sort((a, b) => b.answers - a.answers);
+  const chapters = chapterDocs
+    .map((d) => ({
+      subject: d.fields.subject?.stringValue || "",
+      chapter: d.fields.chapter?.stringValue || "(unnamed)",
+      answers: num(d.fields.answers),
+    }))
+    .filter((c) => c.answers > 0)
+    .sort((a, b) => b.answers - a.answers);
+  const banks = bankDocs
+    .map((d) => ({ bankId: d.id, name: bankNames.get(d.id) || d.id, answers: num(d.fields.answers) }))
+    .filter((b) => b.answers > 0)
+    .sort((a, b) => b.answers - a.answers);
+  const total = banks.reduce((a, b) => a + b.answers, 0);
+
+  return { subjects, chapters, banks, total };
 }
 
 async function computeUserDetail(uid: string) {
@@ -733,26 +810,47 @@ async function computeUserDetail(uid: string) {
       sessionsCompleted++;
     }
   }
-  let qbankAnswers = 0;
+  // Authoritative per-user counters live on users_index (incremented on every
+  // answer). The old code ran an aggregation against a non-existent
+  // `qbank_progress` collection, so it always returned 0.
+  const qbankAnswers = Number(idx.qbankAnswerCount?.integerValue || idx.qbankAnswerCount?.doubleValue || 0);
+  const indexedFlashcards = Number(idx.flashcardCount?.integerValue || idx.flashcardCount?.doubleValue || 0);
+
+  // Per-user most-answered subjects: scan the user's own progress blobs
+  // (a few docs) and count answered entries by stored subject. Entries saved
+  // before subject tracking carry no label and read as "Earlier answers".
+  let topSubjects: Array<{ subject: string; answers: number }> = [];
   try {
-    const sa = getServiceAccount();
-    const token = await getGoogleAccessToken();
-    const url = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index/${uid}:runAggregationQuery`;
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        structuredAggregationQuery: {
-          structuredQuery: { from: [{ collectionId: "qbank_progress" }] },
-          aggregations: [{ count: {}, alias: "c" }]
+    const saU = getServiceAccount();
+    const tokenU = await getGoogleAccessToken();
+    const subjCount = new Map<string, number>();
+    let pt = "";
+    for (let page = 0; page < 20; page++) {
+      const params = new URLSearchParams({ pageSize: "100" });
+      if (pt) params.set("pageToken", pt);
+      const r = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${saU.project_id}/databases/(default)/documents/users_index/${uid}/qbank_progress_blobs?${params}`,
+        { headers: { Authorization: `Bearer ${tokenU}` } },
+      );
+      if (!r.ok) break;
+      const d = await r.json();
+      for (const doc of d.documents || []) {
+        const prog = doc.fields?.progress?.mapValue?.fields || {};
+        for (const q of Object.values(prog)) {
+          const f = (q as any)?.mapValue?.fields || {};
+          if (!("correct" in f)) continue; // mark/note-only, not an answer
+          const s = String(f.subject?.stringValue || "").trim() || "Earlier answers";
+          subjCount.set(s, (subjCount.get(s) || 0) + 1);
         }
-      })
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      qbankAnswers = Number(data[0]?.result?.aggregateFields?.c?.integerValue || 0);
+      }
+      pt = d.nextPageToken || "";
+      if (!pt) break;
     }
-  } catch { /* ignore */ }
+    topSubjects = [...subjCount.entries()]
+      .map(([subject, answers]) => ({ subject, answers }))
+      .sort((a, b) => b.answers - a.answers)
+      .slice(0, 5);
+  } catch { /* non-fatal */ }
 
   return {
     uid,
@@ -770,13 +868,15 @@ async function computeUserDetail(uid: string) {
     docCount: documentSummaries.length,
     documents: documentSummaries.slice(0, 100),
     totalChunks,
-    totalFlashcards,
+    totalFlashcards: Math.max(totalFlashcards, indexedFlashcards),
+    flashcardCount: indexedFlashcards,
     totalQuizzes,
     sectionsSummarized,
     sectionsExamTaken,
     sectionsSmartExplained,
     sectionsAnnotated,
     qbankAnswers,
+    topSubjects,
     totalFocusMinutes,
     sessionsCompleted,
     hasData: !!raw,
@@ -856,6 +956,9 @@ export const Route = createFileRoute("/api/admin")({
             const uid = url.searchParams.get("uid") || "";
             if (!uid || uid.length > 128) return json({ error: "Bad request" }, 400, cors);
             return json(await computeUserDetail(uid), 200, cors);
+          }
+          if (action === "stats_qbank_breakdown") {
+            return json(await computeQbankBreakdown(), 200, cors);
           }
           if (action === "get_ai_providers") {
             const cfg = await loadProvidersConfig(true);
@@ -2487,9 +2590,7 @@ Text to process:\n${body.rawText}`
                    const d = r.document;
                    const pathParts = d.name.split("/");
                    const qId = pathParts.pop() || "";
-                   
                    return {
-                     id: qId,
                      qbankId: qbankId,
                      questionText: d.fields?.questionText?.stringValue || "",
                      data: d.fields?.data?.stringValue || "{}",

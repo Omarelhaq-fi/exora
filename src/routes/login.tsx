@@ -366,11 +366,21 @@ function LoginPage() {
             className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#0e7c86] via-[#7cd4df] to-[#006443]"
           />
           <a href="/" className="flex items-center gap-2 self-start">
-            <img
-              src="/app/assets/logo.png"
-              alt="CuraQ logo"
-              className="w-6 h-6 rounded-[25%] object-cover"
-            />
+            <picture>
+              <source
+                type="image/webp"
+                srcSet="/images/optimized/logo-64.webp 64w, /images/optimized/logo-128.webp 128w"
+                sizes="48px"
+              />
+              <img
+                src="/app/assets/logo.png"
+                alt="CuraQ logo"
+                width={24}
+                height={24}
+                decoding="async"
+                className="w-6 h-6 rounded-[25%] object-cover"
+              />
+            </picture>
             <span className="font-display text-[17px] font-bold text-[#0e7c86] tracking-tight">
               CuraQ
             </span>
@@ -542,7 +552,22 @@ function LoginPage() {
             aria-hidden="true"
             className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 z-30 hidden lg:grid w-12 h-12 rounded-full bg-white place-items-center ring-1 ring-black/5 border border-white shadow-[0_4px_12px_rgba(0,0,0,0.08)]"
           >
-            <img src="/app/assets/logo.png" alt="" className="w-6 h-6 rounded-full object-cover" />
+            <picture>
+              <source
+                type="image/webp"
+                srcSet="/images/optimized/logo-64.webp 64w, /images/optimized/logo-128.webp 128w"
+                sizes="48px"
+              />
+              <img
+                src="/app/assets/logo.png"
+                alt=""
+                width={24}
+                height={24}
+                loading="lazy"
+                decoding="async"
+                className="w-6 h-6 rounded-full object-cover"
+              />
+            </picture>
           </div>
           <div className="flex items-start justify-between gap-4 max-w-2xl w-full mx-auto shrink-0">
             <div>
