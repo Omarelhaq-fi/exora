@@ -208,17 +208,6 @@ export const Route = createFileRoute("/api/qbank")({
           }
         }
 
-        if (action === "debug_peer_stats_doc") {
-          try {
-            const url = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/admin/peer_stats_settings`;
-            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-            const data = await r.json();
-            return json({ raw: data }, 200, cors);
-          } catch (e) {
-            return json({ error: e.message }, 500, cors);
-          }
-        }
-
         // Auth required for everything below
         try {
           const auth = request.headers.get("authorization") || "";
@@ -445,7 +434,16 @@ export const Route = createFileRoute("/api/qbank")({
             // document itself is fetched live from Firestore.
             const rawRef = urlObj.searchParams.get("ref") || "";
             const hintBank = urlObj.searchParams.get("qbankId") || "";
-            const wantRefresh = urlObj.searchParams.get("refresh") === "1";
+            const wantRefresh = await (async () => {
+              // refresh=1 rebuilds the index by scanning EVERY question doc
+              // (tens of thousands of reads) — admins only. Everyone else
+              // silently gets the cached index.
+              if (urlObj.searchParams.get("refresh") !== "1") return false;
+              try {
+                const { isAdminEmail } = await import("@/lib/admin.server");
+                return await isAdminEmail(user.email);
+              } catch { return false; }
+            })();
             if (!rawRef || !/^[A-Za-z0-9_-]{3,64}$/.test(rawRef)) return json({ error: "Invalid ref" }, 400, cors);
 
             await ensureQIndex(wantRefresh);
@@ -497,6 +495,10 @@ export const Route = createFileRoute("/api/qbank")({
             const qbankId = urlObj.searchParams.get("qbankId");
             const onlyProgress = urlObj.searchParams.get("onlyProgress") === "true";
             if (!qbankId) return json({ error: "Missing qbankId" }, 400, cors);
+            // Bulk content download (R2/chunks + progress) — tighter than the
+            // shared 60/min gate. Legit clients fetch once per bank version.
+            const gqLimit = rateLimit(`qbank-act:getq:${uid}`, 60_000, 20);
+            if (!gqLimit.ok) return rateLimitResponse(gqLimit.retryAfter, cors);
             
             // Validate alphanumeric to prevent basic injection, though it's just a path param
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId)) return json({ error: "Invalid qbankId" }, 400, cors);
@@ -710,7 +712,10 @@ export const Route = createFileRoute("/api/qbank")({
             if (ids.length === 0) return json({ error: "Missing ids" }, 400, cors);
             if (ids.length > 50) return json({ error: "Too many ids (max 50)" }, 400, cors);
             const uniq = [...new Set(ids)].slice(0, 50);
-            const ansLimit = rateLimit(`qbank-answers:${uid}`, 60_000, 60);
+            // Answer keys are the crown jewels (bulk scrape = ~37k calls at
+            // 50 ids each). 20/min/uid still allows 1000 answers/min for
+            // legit block review.
+            const ansLimit = rateLimit(`qbank-answers:${uid}`, 60_000, 20);
             if (!ansLimit.ok) return rateLimitResponse(ansLimit.retryAfter, cors);
             const access = await resolveBankAccess(sa, token, uid, qbankId);
             if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);
@@ -808,6 +813,11 @@ export const Route = createFileRoute("/api/qbank")({
           const token = await getGoogleAccessToken();
           if (body.action === "batch_sync_progress") {
             const { updates } = body;
+            // Answer-write path: legit clients flush ≤10 queued answers at a
+            // time (or on tab-hide). 15 calls/min/uid stops write-spam
+            // scripts while leaving real study sessions untouched.
+            const syncLimit = rateLimit(`qbank-act:sync:${uid}`, 60_000, 15);
+            if (!syncLimit.ok) return rateLimitResponse(syncLimit.retryAfter, cors);
             if (!Array.isArray(updates) || updates.length === 0) return json({ ok: true }, 200, cors);
             if (updates.length > 100) return json({ error: "Too many updates in batch" }, 400, cors);
             
@@ -904,6 +914,8 @@ export const Route = createFileRoute("/api/qbank")({
 
           if (body.action === "save_progress") {
             const { qbankId, questionId, correct, timeTakenMs } = body;
+            const spLimit = rateLimit(`qbank-act:saveprog:${uid}`, 60_000, 30);
+            if (!spLimit.ok) return rateLimitResponse(spLimit.retryAfter, cors);
             const spSubject = cleanCounterLabel((body as any).subject);
             const spChapter = cleanCounterLabel((body as any).chapter);
 
@@ -973,6 +985,8 @@ export const Route = createFileRoute("/api/qbank")({
           
           if (body.action === "update_question_meta") {
             const { qbankId, questionId, marked, note } = body;
+            const metaLimit = rateLimit(`qbank-act:meta:${uid}`, 60_000, 30);
+            if (!metaLimit.ok) return rateLimitResponse(metaLimit.retryAfter, cors);
             
             if (!qbankId || !questionId) {
               return json({ error: "Invalid payload" }, 400, cors);
@@ -1029,6 +1043,11 @@ export const Route = createFileRoute("/api/qbank")({
           if (body.action === "report_question") {
             const { qbankId, questionId, reason } = body;
             if (!qbankId || !questionId || !reason) return json({ error: "Missing fields" }, 400, cors);
+            // Reports append to the SHARED question doc — cap size (doc-bloat
+            // vector) and rate (report spam).
+            if (String(reason).length > 500) return json({ error: "Reason too long (max 500 chars)" }, 400, cors);
+            const repLimit = rateLimit(`qbank-act:report:${uid}`, 60_000, 10);
+            if (!repLimit.ok) return rateLimitResponse(repLimit.retryAfter, cors);
             
             const sa = getServiceAccount();
             const token = await getGoogleAccessToken();
@@ -1088,6 +1107,36 @@ export const Route = createFileRoute("/api/qbank")({
              if (!body.questionContext || !body.userMessage) {
                 return json({ error: "Missing context or message" }, 400, cors);
              }
+             // AI spend guard: cap input size (token-bill vector — each char
+             // costs provider money) before any rate accounting.
+             if (String(body.questionContext).length > 20000) return json({ error: "Question context too long (max 20000 chars)" }, 400, cors);
+             if (String(body.userMessage).length > 4000) return json({ error: "Message too long (max 4000 chars)" }, 400, cors);
+             // Chatting is real typing speed — 15/min/uid is generous.
+             const chatLimit = rateLimit(`qbank-act:chat:${uid}`, 60_000, 15);
+             if (!chatLimit.ok) return rateLimitResponse(chatLimit.retryAfter, cors);
+             // Same email-verification + daily-cap policy as /api/ai (the
+             // in-memory limiter above is per-isolate; the daily cap is
+             // Firestore-backed and holds across isolates).
+             try {
+               const { isAdminEmail } = await import("@/lib/admin.server");
+               const { loadAuthSettings } = await import("@/lib/auth-settings.server");
+               const chatIsAdmin = await isAdminEmail(user.email);
+               if (!chatIsAdmin) {
+                 const policy = await loadAuthSettings();
+                 if (policy.requireEmailVerification && (user as any).email_verified === false) {
+                   return json({ error: "Please verify your email address before using AI features.", reason: "email_not_verified" }, 403, cors);
+                 }
+                 const { checkAiDailyUsage, AI_DAILY_MAX } = await import("@/lib/ai-usage.server");
+                 const usage = await checkAiDailyUsage(uid, AI_DAILY_MAX);
+                 if (!usage.ok) {
+                   return json({ error: `Daily AI limit reached (${AI_DAILY_MAX}/day). Please try again tomorrow.`, reason: "ai_daily_limit", retryAfter: 3600 }, 429, cors);
+                 }
+               }
+             } catch {
+               // Fail-open: cap helpers are best-effort. Never block legit
+               // chat on a transient settings/identity error (the per-minute
+               // limiter above still applies).
+             }
 
              // Answer in the student's language (explicit choice, or "auto"
              // = match the question's own language). Otherwise the tutor
@@ -1116,6 +1165,12 @@ export const Route = createFileRoute("/api/qbank")({
              ];
 
              const r = await routeRequest({ messages, requireJson: false });
+
+             // Count spend against the daily cap (fire-and-forget).
+             try {
+               const { bumpAiDailyUsage } = await import("@/lib/ai-usage.server");
+               bumpAiDailyUsage(uid);
+             } catch { /* spend tracking must never fail the response */ }
              
              let finalRes = r.text || "";
              // Strip out <think> tags if the model still includes them
@@ -1140,6 +1195,13 @@ export const Route = createFileRoute("/api/qbank")({
           if (body.action === "save_flashcard") {
              const { questionId, qbankId, front, back, concepts } = body;
              if (!questionId || !front) return json({ error: "Missing fields" }, 400, cors);
+             // One Firestore doc per call — cap field sizes (doc-bloat
+             // vector) and rate.
+             if (String(front).length > 5000) return json({ error: "Card front too long (max 5000 chars)" }, 400, cors);
+             if (String(back || "").length > 15000) return json({ error: "Card back too long (max 15000 chars)" }, 400, cors);
+             if (String(concepts || "").length > 2000) return json({ error: "Concepts too long (max 2000 chars)" }, 400, cors);
+             const fcLimit = rateLimit(`qbank-act:flash:${uid}`, 60_000, 30);
+             if (!fcLimit.ok) return rateLimitResponse(fcLimit.retryAfter, cors);
              
              // Ensure reasonable limits
              const cardId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -1177,6 +1239,10 @@ export const Route = createFileRoute("/api/qbank")({
             // Student asks for permission to open another country's bank.
             const qbankId = String(body?.qbankId || "");
             const reason = String(body?.reason || "").trim().slice(0, 600);
+            // Each call costs a runQuery read + writes — 10/min/uid is plenty
+            // for a form humans submit once.
+            const raLimit = rateLimit(`qbank-act:reqacc:${uid}`, 60_000, 10);
+            if (!raLimit.ok) return rateLimitResponse(raLimit.retryAfter, cors);
             if (!qbankId || !/^[a-zA-Z0-9_-]+$/.test(qbankId)) return json({ error: "Missing qbankId" }, 400, cors);
             if (!reason || reason.length < 5) return json({ error: "Please provide a short reason" }, 400, cors);
 
@@ -1267,6 +1333,11 @@ export const Route = createFileRoute("/api/qbank")({
           if (body.action === "save_study_concept") {
             const { qbankId, questionId, studyConcept } = body;
             if (!qbankId || !questionId || !studyConcept) return json({ error: "Missing fields" }, 400, cors);
+            // Writes to the SHARED question doc (+ digest) — cap size so one
+            // caller can't bloat/corrupt shared content, and rate the writes.
+            if (String(studyConcept).length > 60000) return json({ error: "Concept too long (max 60000 chars)" }, 400, cors);
+            const scLimit = rateLimit(`qbank-act:concept:${uid}`, 60_000, 20);
+            if (!scLimit.ok) return rateLimitResponse(scLimit.retryAfter, cors);
             if (!/^[a-zA-Z0-9_-]+$/.test(qbankId) || !/^[a-zA-Z0-9_-]+$/.test(questionId)) return json({ error: "Invalid ids" }, 400, cors);
             const access = await resolveBankAccess(sa, token, uid, qbankId);
             if (!access.ok) return json({ error: access.status === 404 ? "QBank not found" : "Forbidden" }, access.status === 404 ? 404 : 403, cors);

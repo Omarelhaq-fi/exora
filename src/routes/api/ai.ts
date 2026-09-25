@@ -92,6 +92,23 @@ export const Route = createFileRoute("/api/ai")({
         const userLimit = rateLimit(`ai:uid:${user.sub}`, 60_000, 30);
         if (!userLimit.ok) return rateLimitResponse(userLimit.retryAfter, cors);
 
+        // Daily AI spend cap (Firestore-backed: holds across Worker
+        // isolates, unlike the per-minute limiter above). Admins exempt.
+        if (!isAdmin) {
+          const { checkAiDailyUsage, AI_DAILY_MAX } = await import("@/lib/ai-usage.server");
+          const usage = await checkAiDailyUsage(String(user.sub), AI_DAILY_MAX);
+          if (!usage.ok) {
+            return json(
+              {
+                error: `Daily AI limit reached (${AI_DAILY_MAX}/day). Please try again tomorrow.`,
+                reason: "ai_daily_limit",
+              },
+              429,
+              cors,
+            );
+          }
+        }
+
         let raw: unknown;
         try { raw = await request.json(); }
         catch { return json({ error: "Bad request" }, 400, cors); }
@@ -154,6 +171,11 @@ export const Route = createFileRoute("/api/ai")({
             const cfg = await loadProvidersConfig();
             const custom = await loadCustomChains();
             chainInfo = resolveChain(taskId, cfg, custom);
+          }
+
+          if (!isAdmin) {
+            const { bumpAiDailyUsage } = await import("@/lib/ai-usage.server");
+            bumpAiDailyUsage(String(user.sub));
           }
 
           return json(

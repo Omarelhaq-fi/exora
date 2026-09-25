@@ -73,7 +73,7 @@ export const Route = createFileRoute("/api/qbank_static")({
             });
           }
 
-          const userLimit = rateLimit(`qbank-static:uid:${uid}`, 60_000, 30);
+          const userLimit = rateLimit(`qbank-static:uid:${uid}`, 60_000, 10);
           if (!userLimit.ok) return rateLimitResponse(userLimit.retryAfter, cors);
 
           // ---- Optional App Check (opt-in enforcement, presence logged).
