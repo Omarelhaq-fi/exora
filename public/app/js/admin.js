@@ -1427,11 +1427,12 @@
     if (!box) return;
     box.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">Loading stats…</div>';
     try {
-      const [ov, usersData] = await Promise.all([
+      const [ov, usersData, breakdown] = await Promise.all([
         api("/api/admin?action=stats_overview", { method: "GET" }),
         api("/api/admin?action=list_users", { method: "GET" }),
+        api("/api/admin?action=stats_qbank_breakdown", { method: "GET" }).catch(() => null),
       ]);
-      renderStatsTab(box, ov, usersData.users || []);
+      renderStatsTab(box, ov, usersData.users || [], breakdown || null);
     } catch (e) {
       box.innerHTML = `<div style="color:#f43;padding:20px;">${escapeHtml(e.message)}</div>`;
     }
@@ -1446,72 +1447,137 @@
     </div>`;
   }
 
-  function renderStatsTab(box, ov, users) {
-    let supporterCount = 0;
-    let supporterPlusCount = 0;
-    users.forEach((u) => {
-      const notExpired = !u.proUntil || new Date(u.proUntil).getTime() > Date.now();
-      if (u.plan === "pro" && notExpired) supporterCount++;
-      if (u.plan === "aplus" && notExpired) supporterPlusCount++;
-    });
+  // Most-answered leaderboards (Top QBanks / Subjects / Categories).
+  // Counts accumulate from new answers via server-side counters; answers
+  // submitted before this shipped are not included.
+  function boardCol(title, accent, items) {
+    const top = (items || []).slice(0, 8);
+    const max = top.length ? Math.max(...top.map((i) => i.answers)) : 0;
+    const rows = top.map((i) => {
+      const pct = max ? Math.max(4, Math.round((i.answers / max) * 100)) : 0;
+      return `<div style="margin-bottom:9px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.76rem;margin-bottom:3px;">
+          <span style="color:var(--text-primary);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(i.label)}</span>
+          <span style="color:var(--text-secondary);font-variant-numeric:tabular-nums;flex-shrink:0;">${fmt(i.answers)}</span>
+        </div>
+        <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;">
+          <div style="height:100%;width:${pct}%;border-radius:999px;background:${accent};"></div>
+        </div>
+      </div>`;
+    }).join("");
+    return `<div style="flex:1;min-width:220px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 16px;">
+      <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:700;margin-bottom:12px;">${escapeHtml(title)}</div>
+      ${rows || `<div style="font-size:0.76rem;color:var(--text-muted);padding:6px 0;">No answers counted yet.</div>`}
+    </div>`;
+  }
+
+  function breakdownBoards(bd) {
+    if (!bd) return "";
+    const banks = (bd.banks || []).map((b) => ({ label: b.name || b.bankId, answers: b.answers }));
+    const subjects = (bd.subjects || []).map((s) => ({ label: s.name, answers: s.answers }));
+    const chapters = (bd.chapters || []).map((c) => ({
+      label: c.subject ? `${c.subject} · ${c.chapter}` : c.chapter,
+      answers: c.answers,
+    }));
+    const empty = !banks.length && !subjects.length && !chapters.length;
+    return `<div style="margin-bottom:20px;">
+      <div style="font-size:0.78rem;font-weight:700;color:var(--text-primary);margin-bottom:2px;">Most answered</div>
+      <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:12px;">${empty ? "Counts start from new answers — ask a question to seed the boards." : `Across ${fmt(bd.total || 0)} counted answers`}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        ${boardCol("Top QBanks", "#22d3ee", banks)}
+        ${boardCol("Top Subjects", "#a78bfa", subjects)}
+        ${boardCol("Top Categories", "#f59e0b", chapters)}
+      </div>
+    </div>`;
+  }
+
+  function renderStatsTab(box, ov, users, breakdown) {
+    // App-wide totals (fall back to summing the user list if aggregation is missing).
+    const sumQ = users.reduce((a, u) => a + Number(u.qbankAnswerCount || 0), 0);
+    const sumF = users.reduce((a, u) => a + Number(u.flashcardCount || 0), 0);
+    const totalQ = Number(ov.totalQbankAnswers || 0) || sumQ;
+    const totalF = Number(ov.totalFlashcards || 0) || sumF;
+    const totalU = Number(ov.totalUsers || 0) || users.length;
 
     const cards = [
-      statCard("Total Users", fmt(ov.totalUsers), "registered accounts", "#a78bfa"),
-      statCard("Supporters", fmt(supporterCount), "active $10/mo subs", "#67e8f9"),
-      statCard("Supporter+", fmt(supporterPlusCount), "active $20/mo subs", "#fbbf24"),
-      statCard("Total Docs", fmt(ov.totalDocs), "uploaded platform-wide", "#34d399"),
-      statCard("Total Flashcards", fmt(ov.totalFlashcards), "generated platform-wide", "#f59e0b"),
-      statCard("Active 24h", fmt(ov.active24h), "any app activity, last day", "#22d3ee"),
-      statCard("Active 7d", fmt(ov.active7d), "any app activity this week", "#fbbf24"),
+      statCard("Total Users", fmt(totalU), "registered accounts", "#a78bfa"),
+      statCard("Active · 30 min", fmt(ov.active30m || 0), `of ${fmt(totalU)} · ${fmt(ov.active24h || 0)} in 24h`, "#22d3ee"),
+      statCard("Flashcards", fmt(totalF), "app-wide total", "#f59e0b"),
+      statCard("QBank Answers", fmt(totalQ), "questions answered app-wide", "#06b6d4"),
     ].join("");
 
-    const rowsHtml = users.map((u) => {
-      return `<tr data-uid="${escapeHtml(u.uid)}" data-email="${escapeHtml((u.email || "").toLowerCase())}" style="border-top:1px solid rgba(255,255,255,0.06);cursor:pointer;">
+    const withMeta = users.map((u) => ({
+      u,
+      q: Number(u.qbankAnswerCount || 0),
+      f: Number(u.flashcardCount || 0),
+      last: lastActivityIso(u),
+    }));
+
+    const rowsHtml = (list) => list.map(({ u, q, f, last }) => {
+      return `<tr data-uid="${escapeHtml(u.uid)}" data-email="${escapeHtml((u.email || "").toLowerCase())}" data-q="${q}" data-f="${f}" data-last="${escapeHtml(last || "")}" style="border-top:1px solid rgba(255,255,255,0.06);cursor:pointer;">
         <td style="padding:10px 8px;color:var(--text-primary);word-break:break-all;">${escapeHtml(u.email || "(no email)")}${u.noProfile ? `<div style="font-size:0.64rem;color:var(--text-muted);">signed in · no data yet</div>` : ""}</td>
-        <td style="padding:10px 8px;color:var(--text-secondary);text-align:right;">${fmt(u.docCount || 0)}</td>
-        <td style="padding:10px 8px;color:var(--text-secondary);text-align:right;">${fmt(u.flashcardCount || 0)}</td>
-        <td style="padding:10px 8px;color:var(--text-secondary);white-space:nowrap;">${escapeHtml(relTime(lastActivityIso(u)))}${u.lastActionLabel ? `<div style="font-size:0.66rem;color:var(--text-muted);">${escapeHtml(u.lastActionLabel)}</div>` : ""}</td>
+        <td style="padding:10px 8px;color:var(--text-secondary);text-align:right;font-variant-numeric:tabular-nums;">${fmt(f)}</td>
+        <td style="padding:10px 8px;color:var(--text-secondary);text-align:right;font-variant-numeric:tabular-nums;font-weight:700;">${fmt(q)}</td>
+        <td style="padding:10px 8px;color:var(--text-secondary);white-space:nowrap;">${escapeHtml(relTime(last))}${u.lastActionLabel ? `<div style="font-size:0.66rem;color:var(--text-muted);">${escapeHtml(u.lastActionLabel)}</div>` : ""}</td>
         <td style="padding:10px 8px;text-align:right;"><button class="btn-dark-pill" style="padding:5px 10px;font-size:0.7rem;" data-open-uid="${escapeHtml(u.uid)}">Details</button></td>
       </tr>`;
     }).join("");
 
     box.innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">${cards}</div>
+      ${breakdownBoards(breakdown)}
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
         <input id="admin-stats-search" placeholder="Search by email…" style="flex:1;min-width:220px;padding:10px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:0.85rem;">
-        <span style="font-size:0.72rem;color:var(--text-muted);">Click a row for full detail</span>
+        <select id="admin-stats-sort" style="padding:10px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:0.8rem;">
+          <option value="active">Sort: most active</option>
+          <option value="qbank">Sort: most QBank answers</option>
+          <option value="flash">Sort: most flashcards</option>
+        </select>
+        <button class="btn-dark-pill" id="admin-stats-refresh" style="padding:9px 14px;font-size:0.75rem;">Refresh</button>
       </div>
       <div style="max-height:50vh;overflow-y:auto;border:1px solid rgba(255,255,255,0.08);border-radius:12px;">
         <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
           <thead><tr style="background:rgba(255,255,255,0.04);">
             <th style="padding:10px 8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">User</th>
-            <th style="padding:10px 8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Docs</th>
             <th style="padding:10px 8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Flashcards</th>
+            <th style="padding:10px 8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">QBank Answers</th>
             <th style="padding:10px 8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Last Active</th>
             <th style="padding:10px 8px;"></th>
           </tr></thead>
-          <tbody id="admin-stats-rows">${rowsHtml || '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">No users yet.</td></tr>'}</tbody>
+          <tbody id="admin-stats-rows">${rowsHtml(withMeta) || '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">No users yet.</td></tr>'}</tbody>
         </table>
       </div>
       <div id="admin-stats-detail"></div>
     `;
 
+    const applyFilter = () => {
+      const q = (document.getElementById("admin-stats-search").value || "").toLowerCase();
+      const sort = document.getElementById("admin-stats-sort").value;
+      let list = withMeta.filter(({ u }) => (u.email || "").toLowerCase().includes(q));
+      if (sort === "qbank") list.sort((a, b) => b.q - a.q);
+      else if (sort === "flash") list.sort((a, b) => b.f - a.f);
+      else list.sort((a, b) => String(b.last || "").localeCompare(String(a.last || "")));
+      document.getElementById("admin-stats-rows").innerHTML = rowsHtml(list) || '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">No matches.</td></tr>';
+      bindRows();
+    };
     const search = document.getElementById("admin-stats-search");
-    if (search) search.oninput = () => {
-      const q = search.value.toLowerCase();
-      document.querySelectorAll("#admin-stats-rows tr").forEach((r) => {
-        r.style.display = (r.dataset.email || "").includes(q) ? "" : "none";
+    if (search) search.oninput = applyFilter;
+    const sortSel = document.getElementById("admin-stats-sort");
+    if (sortSel) sortSel.onchange = applyFilter;
+    const refresh = document.getElementById("admin-stats-refresh");
+    if (refresh) refresh.onclick = () => loadAdminStats();
+    const bindRows = () => {
+      box.querySelectorAll("[data-open-uid]").forEach((b) => {
+        b.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          openUserStatsDetail(b.getAttribute("data-open-uid"));
+        });
+      });
+      box.querySelectorAll("#admin-stats-rows tr[data-uid]").forEach((tr) => {
+        tr.addEventListener("click", () => openUserStatsDetail(tr.getAttribute("data-uid")));
       });
     };
-    box.querySelectorAll("[data-open-uid]").forEach((b) => {
-      b.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        openUserStatsDetail(b.getAttribute("data-open-uid"));
-      });
-    });
-    box.querySelectorAll("#admin-stats-rows tr[data-uid]").forEach((tr) => {
-      tr.addEventListener("click", () => openUserStatsDetail(tr.getAttribute("data-uid")));
-    });
+    bindRows();
   }
 
   async function openUserStatsDetail(uid) {
@@ -1520,53 +1586,41 @@
     host.innerHTML = `<div style="margin-top:16px;padding:20px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;color:var(--text-muted);text-align:center;">Loading user…</div>`;
     try {
       const d = await api(`/api/admin?action=stats_user_detail&uid=${encodeURIComponent(uid)}`, { method: "GET" });
-      const docsHtml = (d.documents || []).map((doc) => `
-        <tr style="border-top:1px solid rgba(255,255,255,0.05);">
-          <td style="padding:8px;color:var(--text-primary);">${escapeHtml(doc.name)}${doc.sourceType ? ` <span style="color:var(--text-muted);font-size:0.68rem;">· ${escapeHtml(doc.sourceType)}</span>` : ""}</td>
-          <td style="padding:8px;color:var(--text-secondary);text-align:right;">${fmt(doc.chunkCount)}</td>
-          <td style="padding:8px;color:var(--text-secondary);text-align:right;">${fmt(doc.flashcardCount)}</td>
-          <td style="padding:8px;color:var(--text-secondary);text-align:right;">${fmt(doc.quizCount)}</td>
-          <td style="padding:8px;color:var(--text-secondary);text-align:right;">${fmt(doc.smartExplainCount || 0)}</td>
-          <td style="padding:8px;color:var(--text-secondary);text-align:right;">${fmt(doc.annotatedCount || 0)}</td>
-        </tr>
-      `).join("");
+      const fc = Number(d.flashcardCount ?? d.totalFlashcards ?? 0);
+      const qa = Number(d.qbankAnswers ?? 0);
+      const tops = Array.isArray(d.topSubjects) ? d.topSubjects.slice(0, 5) : [];
+      const topMax = tops.length ? Math.max(...tops.map((t) => Number(t.answers) || 0)) : 0;
+      const topsHtml = tops.map((t) => {
+        const n = Number(t.answers) || 0;
+        const pct = topMax ? Math.max(4, Math.round((n / topMax) * 100)) : 0;
+        return `<div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.76rem;margin-bottom:3px;">
+            <span style="color:var(--text-primary);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.subject)}</span>
+            <span style="color:var(--text-secondary);font-variant-numeric:tabular-nums;flex-shrink:0;">${fmt(n)}</span>
+          </div>
+          <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;">
+            <div style="height:100%;width:${pct}%;border-radius:999px;background:#a78bfa;"></div>
+          </div>
+        </div>`;
+      }).join("");
       host.innerHTML = `
         <div style="margin-top:16px;padding:20px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
             <div>
               <div style="font-weight:700;color:var(--text-primary);word-break:break-all;">${escapeHtml(d.email || "(no email)")}</div>
-              <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">uid: ${escapeHtml(d.uid)} · last active ${escapeHtml(relTime(lastActivityIso(d)))}${d.lastActionLabel ? " (" + escapeHtml(d.lastActionLabel) + ")" : ""} · last AI use ${escapeHtml(relTime(d.lastSeenIso))} · last login ${escapeHtml(relTime(d.lastLoginIso))}</div>
+              <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">uid: ${escapeHtml(d.uid)} · last active ${escapeHtml(relTime(lastActivityIso(d)))}${d.lastActionLabel ? " (" + escapeHtml(d.lastActionLabel) + ")" : ""}</div>
             </div>
             <button class="btn-dark-pill" style="padding:6px 12px;font-size:0.75rem;" onclick="document.getElementById('admin-stats-detail').innerHTML='';">Close</button>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
-            ${statCard("Plan", (d.plan || "free").toUpperCase(), d.proUntil ? ("until " + new Date(d.proUntil).toLocaleDateString()) : "", d.plan === "aplus" ? "#fbbf24" : d.plan === "pro" ? "#67e8f9" : "var(--text-secondary)")}
-            ${statCard("Credits", fmt(d.credits), `${fmt(d.creditsUsedThisMonth)} used this month`, "#f472b6")}
-            ${statCard("Documents", fmt(d.docCount), `${(d.dataBytes/1024).toFixed(1)} KB stored`, "#a78bfa")}
-            ${statCard("Chunks", fmt(d.totalChunks), `${fmt(d.sectionsSummarized)} summarized`, "#34d399")}
-            ${statCard("Flashcards", fmt(d.totalFlashcards), "across all docs", "#f59e0b")}
-            ${statCard("Quizzes", fmt(d.totalQuizzes), `${fmt(d.sectionsExamTaken)} exams taken`, "#c084fc")}
-            ${statCard("Focus Minutes", fmt(d.totalFocusMinutes), `${fmt(d.sessionsCompleted)} pomodoro sessions`, "#22d3ee")}
-            ${statCard("Smart Explain", fmt(d.sectionsSmartExplained || 0), "sections explained", "#38bdf8")}
-            ${statCard("Annotations", fmt(d.sectionsAnnotated || 0), "sections with drawings/highlights", "#facc15")}
-            ${statCard("QBank Answers", fmt(d.qbankAnswers || 0), "questions answered", "#06b6d4")}
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+            ${statCard("Flashcards", fmt(fc), "user total", "#f59e0b")}
+            ${statCard("QBank Answers", fmt(qa), "questions answered", "#06b6d4")}
+            ${statCard("Last Active", relTime(lastActivityIso(d)), d.lastActionLabel ? escapeHtml(d.lastActionLabel) : "last seen", "#22d3ee")}
           </div>
-          <div>
-            <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:700;margin-bottom:6px;">Documents (${d.docCount})</div>
-            ${docsHtml ? `<div style="max-height:260px;overflow-y:auto;border:1px solid rgba(255,255,255,0.08);border-radius:10px;">
-              <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
-                <thead><tr style="background:rgba(255,255,255,0.04);">
-                  <th style="padding:8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.68rem;text-transform:uppercase;">Name</th>
-                  <th style="padding:8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.68rem;text-transform:uppercase;">Chunks</th>
-                  <th style="padding:8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.68rem;text-transform:uppercase;">Flashcards</th>
-                  <th style="padding:8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.68rem;text-transform:uppercase;">Quizzes</th>
-                  <th style="padding:8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.68rem;text-transform:uppercase;">Explains</th>
-                  <th style="padding:8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.68rem;text-transform:uppercase;">Annot.</th>
-                </tr></thead>
-                <tbody>${docsHtml}</tbody>
-              </table>
-            </div>` : `<div style="color:var(--text-muted);font-size:0.78rem;padding:10px;">No documents uploaded.</div>`}
-          </div>
+          ${topsHtml ? `<div style="margin-top:14px;">
+            <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:700;margin-bottom:8px;">Most answered subjects</div>
+            ${topsHtml}
+          </div>` : ""}
         </div>
       `;
       host.scrollIntoView({ behavior: "smooth", block: "start" });

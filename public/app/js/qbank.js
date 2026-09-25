@@ -3300,7 +3300,9 @@
         qbankId: currentQBankId,
         questionId: q.id,
         correct: isCorrect,
-        timeTakenMs: currentQuestionTimeMs
+        timeTakenMs: currentQuestionTimeMs,
+        subject: (q.data && q.data.subject) || "",
+        chapter: (q.data && q.data.chapter) || ""
       });
     }
 
