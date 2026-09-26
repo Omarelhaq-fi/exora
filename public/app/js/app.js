@@ -8,11 +8,42 @@ let db = {
 
 let activeDocId = null;
 
+// Signed-out state WITHOUT leaving the page. Navigating blindly to '/'
+// reload-loops when the deploy serves this app shell from the site root
+// (initApp(null) -> '/' -> same page -> initApp(null) -> ...), so prefer
+// staying in place under /app/* and only navigate when it is safe.
+function showLoginGate() {
+    try { window.hideGlobalLoader && window.hideGlobalLoader(); } catch (_) {}
+    try {
+        document.querySelectorAll('.usmle-fullscreen').forEach(function (m) {
+            if (m && m.style && m.style.display !== 'none') m.style.display = 'none';
+        });
+    } catch (_) {}
+    try { document.body.style.overflow = ''; } catch (_) {}
+    try {
+        const appWrapper = document.getElementById('app-wrapper');
+        if (appWrapper) appWrapper.style.display = 'none';
+    } catch (_) {}
+    try {
+        const loginEl = document.getElementById('login-screen');
+        if (loginEl) loginEl.style.display = 'flex';
+    } catch (_) {}
+}
+
+function goPostSignout() {
+    try { window.hideGlobalLoader && window.hideGlobalLoader(); } catch (_) {}
+    try {
+        const p = window.location.pathname || '';
+        // Inside the app: stay put and show the gate. Never navigate to
+        // the URL we're already on — that is the reload loop.
+        if (p.indexOf('/app') === 0) { showLoginGate(); return; }
+        if (p !== '/login') window.location.href = '/login';
+    } catch (_) {}
+}
+
 async function initApp(user) {
     if (!user) {
-        // Redirect to landing page for sign-in/sign-up
-        try { window.hideGlobalLoader && window.hideGlobalLoader(); } catch (_) {}
-        window.location.href = '/';
+        goPostSignout();
         return;
     }
 
@@ -1382,7 +1413,8 @@ window.handleGoogleSignIn = async function () {
 }
 
 window.handleLogout = async function () {
-    await firebase.auth().signOut();
+    try { await firebase.auth().signOut(); } catch (_) {}
+    try { window.__initUid = null; } catch (_) {}
     initApp(null);
 }
 
