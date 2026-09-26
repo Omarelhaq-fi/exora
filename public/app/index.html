@@ -646,6 +646,7 @@
                     <button class="admin-tab" data-tab="support" onclick="window.switchAdminTab('support')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="life-buoy" style="width:14px;height:14px;vertical-align:-2px;"></i> Support</button>
                     <button class="admin-tab" data-tab="peerstats" onclick="window.switchAdminTab('peerstats')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="bar-chart-3" style="width:14px;height:14px;vertical-align:-2px;"></i> Peer Stats</button>
                     <button class="admin-tab" data-tab="library" onclick="window.switchAdminTab('library')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="book-open" style="width:14px;height:14px;vertical-align:-2px;"></i> Library</button>
+                    <button class="admin-tab" data-tab="feedback" onclick="window.switchAdminTab('feedback')" style="background:transparent; border:none; color:var(--text-secondary); padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; font-weight:600; font-size:0.9rem;"><i data-lucide="star" style="width:14px;height:14px;vertical-align:-2px;"></i> Feedback</button>
                 </div>
                 <div style="flex:1; overflow-y:auto; padding:22px; min-height:0;">
                     <div id="admin-panel-keys" class="admin-tab-panel">
@@ -671,6 +672,9 @@
                     </div>
                     <div id="admin-panel-library" class="admin-tab-panel" style="display:none;">
                         <div id="admin-library-content"></div>
+                    </div>
+                    <div id="admin-panel-feedback" class="admin-tab-panel" style="display:none;">
+                        <div id="admin-feedback-content"></div>
                     </div>
                     <div id="admin-panel-stats" class="admin-tab-panel" style="display:none;">
                         <div id="admin-stats-content"></div>
@@ -924,7 +928,7 @@
     <script src="js/welcome.js?v=1"></script>
     <script src="js/rich-render.js?v=4"></script>
     <script src="js/rich-question-editor.js?v=5"></script>
-    <script src="js/admin.js?v=14"></script>
+    <script src="js/admin.js?v=17"></script>
     <script src="js/quotas.js"></script>
     <script src="js/subscription.js"></script>
     <script src="js/plan-gate.js"></script>
@@ -937,7 +941,7 @@
     <script src="js/book-mode.js?v=2"></script>
     <script src="js/study-party.js?v=2"></script>
     <script src="js/qbank-party.js?v=1"></script>
-    <script src="js/qbank.js?v=31"></script>
+    <script src="js/qbank.js?v=32"></script>
     <script src="js/library.js?v=1"></script>
 
     <script src="js/whiteboard.js"></script>
@@ -949,6 +953,7 @@
     <script src="js/dashboard-ux.js"></script>
     <script src="js/activity.js"></script>
     <script src="js/telegram-invite.js?v=1"></script>
+    <script src="js/feedback.js?v=5"></script>
 
 <script src="https://unpkg.com/lucide@0.454.0/dist/umd/lucide.min.js" integrity="sha384-m/CoPp6wBQz6MoZXP+VveuxfvSx0NGXiQyyakzXVOVHgG1fP5bM/UiO4pSNPV6PT" crossorigin="anonymous"></script>
 <script>

@@ -124,6 +124,7 @@
     if (tab === "stats") loadAdminStats();
     if (tab === "qbank") loadAdminQBank();
     if (tab === "library") loadAdminLibrary();
+    if (tab === "feedback") loadAdminFeedback();
     if (tab === "reports") loadAdminReports();
     if (tab === "support") loadAdminSupport();
     if (tab === "peerstats") loadAdminPeerStats();
@@ -1627,6 +1628,181 @@
     } catch (e) {
       host.innerHTML = `<div style="margin-top:16px;padding:16px;color:#f43;border:1px solid rgba(255,50,50,0.2);border-radius:10px;">${escapeHtml(e.message)}</div>`;
     }
+  }
+
+  // ---------- FEEDBACK ----------
+  // In-app rating popup (stars + optional comment). One showing per account
+  // (server-enforced), global on/off lock here, stats + responses below.
+  async function loadAdminFeedback() {
+    const box = document.getElementById("admin-feedback-content");
+    if (!box) return;
+    box.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">Loading feedback…</div>';
+    try {
+      const data = await api("/api/admin?action=feedback_overview", { method: "GET" });
+      renderFeedbackTab(box, data);
+    } catch (e) {
+      box.innerHTML = `<div style="color:#f43;padding:20px;">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function starsVisual(n) {
+    const v = Math.max(0, Math.min(5, Number(n) || 0));
+    let s = "";
+    for (let i = 1; i <= 5; i++) {
+      s += `<span style="color:${i <= v ? "#f59e0b" : "rgba(255,255,255,0.15)"};font-size:0.95rem;">★</span>`;
+    }
+    return `<span style="white-space:nowrap;">${s}</span>`;
+  }
+
+  function renderFeedbackTab(box, data) {
+    // Stale backend (deployed before feedback_overview existed) answers
+    // {ok:true} with no payload — say so instead of showing empty stats.
+    if (!data || !data.stats || !data.items) {
+      box.innerHTML = `<div style="margin-bottom:16px;padding:14px 16px;border-radius:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);color:var(--text-primary);font-size:0.82rem;">The server is running an older build without the feedback API. Deploy the latest build, then reopen this tab.</div>`;
+      return;
+    }
+    const warnBanner = data.warning ? `<div style="margin-bottom:16px;padding:14px 16px;border-radius:12px;background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.3);color:var(--text-primary);font-size:0.78rem;word-break:break-word;">${escapeHtml(data.warning)}</div>` : "";
+    const stats = data.stats || { total: 0, avg: 0, dist: {}, withComments: 0 };
+    const dist = stats.dist || {};
+    const maxD = Math.max(1, ...[1, 2, 3, 4, 5].map((k) => Number(dist[String(k)] || 0)));
+    const distRows = [5, 4, 3, 2, 1].map((k) => {
+      const n = Number(dist[String(k)] || 0);
+      const pct = Math.max(n ? 4 : 0, Math.round((n / maxD) * 100));
+      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:0.78rem;">
+        <span style="color:var(--text-secondary);width:34px;flex-shrink:0;">${k} ★</span>
+        <div style="flex:1;height:8px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;">
+          <div style="height:100%;width:${pct}%;border-radius:999px;background:#f59e0b;"></div>
+        </div>
+        <span style="color:var(--text-secondary);width:44px;text-align:right;font-variant-numeric:tabular-nums;">${fmt(n)}</span>
+      </div>`;
+    }).join("");
+
+    const rowsHtml = (data.items || []).map((it) => {
+      const when = it.createdAtIso || (it.createdAt ? new Date(it.createdAt).toLocaleString() : "—");
+      return `<tr style="border-top:1px solid rgba(255,255,255,0.06);">
+        <td style="padding:10px 8px;white-space:nowrap;">${starsVisual(it.stars)}</td>
+        <td style="padding:10px 8px;color:var(--text-primary);max-width:340px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(it.comment || "—")}</td>
+        <td style="padding:10px 8px;color:var(--text-secondary);word-break:break-all;">${escapeHtml(it.email || "(no email)")}</td>
+        <td style="padding:10px 8px;color:var(--text-secondary);text-align:right;font-variant-numeric:tabular-nums;">${fmt(it.answers || 0)}</td>
+        <td style="padding:10px 8px;color:var(--text-secondary);white-space:nowrap;">${escapeHtml(when)}</td>
+        <td style="padding:10px 8px;text-align:right;"><button class="btn-dark-pill" style="padding:5px 10px;font-size:0.7rem;color:#f43;" data-fb-del="${escapeHtml(it.uid)}|${escapeHtml(it.id)}">Delete</button></td>
+      </tr>`;
+    }).join("");
+
+    const enabled = data.enabled !== false;
+    const pushActive = data.pushActive === true;
+    const pushAt = data.pushAt ? new Date(data.pushAt).toLocaleString() : null;
+    const audience = data.pushAudience === null || data.pushAudience === undefined ? "…" : fmt(data.pushAudience);
+    box.innerHTML = `
+      ${warnBanner}
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 16px;margin-bottom:16px;">
+        <div>
+          <div style="font-weight:700;color:var(--text-primary);">Feedback popup ${enabled ? "unlocked" : "locked"}</div>
+          <div style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;">${enabled ? "Eligible users (5+ answers) see it once per account." : "Nobody sees the popup while locked."}</div>
+        </div>
+        <button class="btn-action ${enabled ? "" : "primary"}" id="admin-feedback-toggle" style="padding:10px 18px;">${enabled ? "Lock popup" : "Unlock popup"}</button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);border-radius:12px;padding:14px 16px;margin-bottom:16px;">
+        <div>
+          <div style="font-weight:700;color:var(--text-primary);">Push to 5+ answered users ${pushActive ? "(active)" : ""}</div>
+          <div style="font-size:0.74rem;color:var(--text-muted);margin-top:2px;">Push the popup once to users with 5 or more answered questions (≈${audience} accounts). Each account still sees it only once, ever. Nothing shows automatically — only while a push is active.${pushAt ? ` Last push: ${escapeHtml(pushAt)}.` : ""}${enabled ? "" : " Unlock the popup first — nothing shows while locked."}</div>
+        </div>
+        <button class="btn-action ${pushActive ? "" : "primary"}" id="admin-feedback-push" style="padding:10px 18px;" ${enabled ? "" : "disabled"}>${pushActive ? "Stop push" : "Push feedback now"}</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px;margin-bottom:16px;">
+        <div style="font-size:0.74rem;color:var(--text-muted);flex:1;min-width:200px;">Testing? Clear one account's once-forever flag so the popup can show to it again (while a push is active).</div>
+        <input id="admin-feedback-reset-email" placeholder="user@email.com" style="width:220px;padding:9px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:0.8rem;">
+        <button class="btn-dark-pill" id="admin-feedback-reset" style="padding:9px 14px;font-size:0.75rem;">Reset account</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;">
+        ${statCard("Responses", fmt(stats.total), "submitted ratings", "#f59e0b")}
+        ${statCard("Average", stats.total ? stats.avg + " ★" : "—", "mean star rating", "#a78bfa")}
+        ${statCard("With Comment", fmt(stats.withComments), "optional comments left", "#22d3ee")}
+      </div>
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 16px;margin-bottom:16px;">
+        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:700;margin-bottom:10px;">Star distribution</div>
+        ${distRows}
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+        <input id="admin-feedback-search" placeholder="Search email or comment…" style="flex:1;min-width:220px;padding:10px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:0.85rem;">
+        <button class="btn-dark-pill" id="admin-feedback-refresh" style="padding:9px 14px;font-size:0.75rem;">Refresh</button>
+      </div>
+      <div style="max-height:50vh;overflow-y:auto;border:1px solid rgba(255,255,255,0.08);border-radius:12px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+          <thead><tr style="background:rgba(255,255,255,0.04);">
+            <th style="padding:10px 8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Rating</th>
+            <th style="padding:10px 8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Comment</th>
+            <th style="padding:10px 8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">User</th>
+            <th style="padding:10px 8px;text-align:right;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Answers</th>
+            <th style="padding:10px 8px;text-align:left;color:var(--text-muted);font-weight:700;font-size:0.7rem;text-transform:uppercase;">Date</th>
+            <th style="padding:10px 8px;"></th>
+          </tr></thead>
+          <tbody id="admin-feedback-rows">${rowsHtml || '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted);">No feedback yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+
+    document.getElementById("admin-feedback-toggle").addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        await api("/api/admin", { method: "POST", body: JSON.stringify({ action: "set_feedback_settings", enabled: !enabled }) });
+        loadAdminFeedback();
+      } catch (e) {
+        alert("Failed: " + e.message);
+        btn.disabled = false;
+      }
+    });
+    const pushBtn = document.getElementById("admin-feedback-push");
+    if (pushBtn && !pushBtn.disabled) pushBtn.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      if (pushActive || confirm(`Push the feedback popup once to ~${audience} users with 5 or more answered questions? Each account will see it only once, ever.`)) {
+        btn.disabled = true;
+        try {
+          await api("/api/admin", { method: "POST", body: JSON.stringify({ action: "set_feedback_settings", pushActive: !pushActive }) });
+          loadAdminFeedback();
+        } catch (e) {
+          alert("Failed: " + e.message);
+          btn.disabled = false;
+        }
+      }
+    });
+    document.getElementById("admin-feedback-refresh").addEventListener("click", loadAdminFeedback);
+    const resetBtn = document.getElementById("admin-feedback-reset");
+    if (resetBtn) resetBtn.addEventListener("click", async () => {
+      const input = document.getElementById("admin-feedback-reset-email");
+      const email = (input.value || "").trim();
+      if (!email) { alert("Enter the account email first."); return; }
+      resetBtn.disabled = true;
+      try {
+        await api("/api/admin", { method: "POST", body: JSON.stringify({ action: "reset_feedback", email }) });
+        alert("Reset done — that account will see the popup on next app open (while a push is active).");
+        loadAdminFeedback();
+      } catch (e) {
+        alert("Reset failed: " + e.message);
+        resetBtn.disabled = false;
+      }
+    });
+    const search = document.getElementById("admin-feedback-search");
+    if (search) search.oninput = () => {
+      const q = search.value.toLowerCase();
+      document.querySelectorAll("#admin-feedback-rows tr").forEach((r) => {
+        r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none";
+      });
+    };
+    box.querySelectorAll("[data-fb-del]").forEach((b) => {
+      b.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const [fuid, fid] = (b.getAttribute("data-fb-del") || "").split("|");
+        if (!fuid || !fid || !confirm("Delete this feedback response?")) return;
+        try {
+          await api("/api/admin", { method: "POST", body: JSON.stringify({ action: "delete_feedback", uid: fuid, id: fid }) });
+          loadAdminFeedback();
+        } catch (e) {
+          alert("Delete failed: " + e.message);
+        }
+      });
+    });
   }
 
   // ---------- SUPPORT ----------

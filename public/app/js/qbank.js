@@ -3304,6 +3304,8 @@
         subject: (q.data && q.data.subject) || "",
         chapter: (q.data && q.data.chapter) || ""
       });
+      // Feedback popup check (self-throttled + no-ops once done forever).
+      try { window.maybeShowFeedback && window.maybeShowFeedback(); } catch (_) {}
     }
 
     // Log answer to global peer stats (write path also patches the cache,
