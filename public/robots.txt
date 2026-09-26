@@ -13,4 +13,4 @@ Allow: /
 User-agent: *
 Allow: /
 
-Sitemap: https://omnote.online/sitemap.xml
+Sitemap: https://curaq.online/sitemap.xml
