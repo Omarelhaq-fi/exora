@@ -4,8 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CuraQ | Free AI Study Workspace for Med Students</title>
-    <meta name="description" content="The best free alternative to RemNote. An intelligent, AI-powered study workspace tailored for med students. Upload PDFs, generate flashcards, and master medical concepts for free.">
+    <title>CuraQ | Medical QBank for Med Students</title>
+    <meta name="description" content="CuraQ Medical QBank for med students. Practice high-yield clinical questions, generate flashcards, and master medical concepts.">
+    <link rel="icon" type="image/png" href="assets/logo.png">
+    <link rel="apple-touch-icon" href="assets/logo.png">
     <!-- JSON-LD Structured Data -->
     <script type="application/ld+json">
     {
@@ -15,12 +17,7 @@
       "url": "https://curaq.online/app/",
       "applicationCategory": "EducationalApplication",
       "operatingSystem": "All",
-      "description": "Free AI-powered study workspace and best alternative to RemNote. Upload PDFs, generate flashcards, and study smarter.",
-      "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "USD"
-      }
+      "description": "CuraQ Medical QBank for med students. Practice high-yield clinical questions, generate flashcards, and study smarter."
     }
     </script>
    <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
@@ -37,6 +34,22 @@
         try {
           if (localStorage.getItem('omnote_theme') === 'dark') {
             document.documentElement.classList.add('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+
+    <script>
+      // Self-heal: this file must only ever be served under /app/*. If a
+      // misconfigured deploy serves it from the site root, the signed-out
+      // boot (initApp(null) -> '/') would reload this same page forever.
+      // Bounce once to the real app URL instead.
+      (function () {
+        try {
+          var p = window.location.pathname;
+          var isHttp = window.location.protocol.indexOf('http') === 0;
+          if (isHttp && (p === '/' || p === '/index.html')) {
+            window.location.replace('/app/index.html');
           }
         } catch (e) {}
       })();
@@ -259,6 +272,10 @@
         <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="exam-prep" href="#" onclick="window.openExamPrepTab && window.openExamPrepTab();">
             <i class="fa-solid fa-graduation-cap text-[16px] w-6 text-center mr-3"></i>
             <span class="font-sans text-[14px]">Exam Prep</span>
+        </a>
+        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="mock-exam" href="#" onclick="window.openQBankMockSetup && window.openQBankMockSetup(); return false;">
+            <i class="fa-solid fa-stopwatch text-[16px] w-6 text-center mr-3"></i>
+            <span class="font-sans text-[14px]">Mock Exam</span>
         </a>
         <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="flashcards" href="#" onclick="window.openFlashcardsExplorer && window.openFlashcardsExplorer();">
             <i class="fa-solid fa-layer-group text-[16px] w-6 text-center mr-3"></i>
@@ -912,7 +929,7 @@
     <script src="js/cloze.js"></script>
 
     <script src="js/planner.js?v=1"></script>
-    <script src="js/app.js?v=3"></script>
+    <script src="js/app.js?v=4"></script>
 
     <script src="js/srs.js"></script>
     <script src="js/editor.js"></script>
@@ -920,8 +937,8 @@
     <script src="js/ai.js"></script>
     <script src="js/full-exam.js"></script>
     <script src="js/summary.js?v=1.1"></script>
-    <script src="js/timer.js"></script>
-    <script src="js/schedule.js"></script>
+    <script src="js/timer.js?v=1"></script>
+    <script src="js/schedule.js?v=1"></script>
     <script src="js/draw.js"></script>
     <script src="js/flashcards.js?v=1"></script>
     <script src="js/deck-import.js?v=1"></script>
@@ -929,8 +946,8 @@
     <script src="js/rich-render.js?v=4"></script>
     <script src="js/rich-question-editor.js?v=5"></script>
     <script src="js/admin.js?v=17"></script>
-    <script src="js/quotas.js"></script>
-    <script src="js/subscription.js"></script>
+    <script src="js/quotas.js?v=1"></script>
+    <script src="js/subscription.js?v=1"></script>
     <script src="js/plan-gate.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/support.js"></script>
@@ -941,14 +958,15 @@
     <script src="js/book-mode.js?v=2"></script>
     <script src="js/study-party.js?v=2"></script>
     <script src="js/qbank-party.js?v=1"></script>
-    <script src="js/qbank.js?v=32"></script>
+    <script src="js/qbank.js?v=33"></script>
+    <script src="js/qbank-mock.js?v=2"></script>
     <script src="js/library.js?v=1"></script>
 
-    <script src="js/whiteboard.js"></script>
-    <script src="js/mindmap.js"></script>
+    <script src="js/whiteboard.js?v=1"></script>
+    <script src="js/mindmap.js?v=1"></script>
     <script src="js/recall.js"></script>
-    <script src="js/goals.js"></script>
-    <script src="js/radar.js"></script>
+    <script src="js/goals.js?v=1"></script>
+    <script src="js/radar.js?v=1"></script>
     <script src="js/layout-polish.js"></script>
     <script src="js/dashboard-ux.js"></script>
     <script src="js/activity.js"></script>
