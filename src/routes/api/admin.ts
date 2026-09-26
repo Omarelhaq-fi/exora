@@ -404,7 +404,8 @@ type Body = {
     | "get_payments_settings" | "set_payments_settings"
     | "get_auth_settings" | "set_auth_settings"
     | "get_peer_stats_settings" | "set_peer_stats_settings"
-    | "stats_overview" | "stats_user_detail"
+     | "stats_overview" | "stats_user_detail" | "feedback_overview"
+     | "set_feedback_settings" | "delete_feedback" | "reset_feedback"
     | "get_ai_providers" | "set_ai_providers" | "test_ai_key"
     | "get_ai_capacity" | "get_ai_recent_calls"
     | "list_ai_functions" | "check_ai_function" | "check_all_ai_functions" | "set_ai_custom_chains"
@@ -733,6 +734,138 @@ async function computeQbankBreakdown() {
   return { subjects, chapters, banks, total };
 }
 
+// ---------- In-app feedback (popup) ----------
+// Responses live under users/{uid}/feedback (owner-only via rules, server
+// reads via collectionGroup). Settings: admin/feedback_settings.enabled.
+async function computeFeedbackOverview() {
+  let enabled = true;
+  let pushActive = false;
+  let pushAt: number | null = null;
+  try {
+    const sdoc = await fsGet("admin/feedback_settings");
+    const v = sdoc?.fields?.enabled?.booleanValue;
+    if (v === false) enabled = false;
+    pushActive = sdoc?.fields?.pushActive?.booleanValue === true;
+    const pa = sdoc?.fields?.pushAt?.integerValue ?? sdoc?.fields?.pushAt?.doubleValue;
+    if (pa !== undefined) pushAt = Number(pa);
+  } catch { /* default enabled, no push */ }
+
+  // Push audience = users with 5+ answered questions (the only accounts a
+  // push can reach). Single cheap count aggregation, no doc reads.
+  let pushAudience: number | null = null;
+  try {
+    const sa = getServiceAccount();
+    const token = await getGoogleAccessToken();
+    const aggUrl = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/users_index:runAggregationQuery`;
+    const resp = await fetch(aggUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        structuredAggregationQuery: {
+          structuredQuery: {
+            from: [{ collectionId: "users_index" }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: "qbankAnswerCount" },
+                op: "GREATER_THAN_OR_EQUAL",
+                value: { integerValue: "5" },
+              },
+            },
+          },
+          aggregations: [{ count: {}, alias: "c" }],
+        },
+      }),
+    });
+    if (resp.ok) {
+      const d = await resp.json();
+      pushAudience = Number(d[0]?.result?.aggregateFields?.c?.integerValue ?? 0);
+    }
+  } catch (e) {
+    console.error("[feedback_overview] audience agg failed:", (e as Error).message);
+  }
+
+  const items: Array<{
+    id: string; uid: string; email: string; stars: number;
+    comment: string; answers: number; createdAt: number; createdAtIso: string | null;
+  }> = [];
+  let feedbackWarning = "";
+  try {
+    const sa = getServiceAccount();
+    const token = await getGoogleAccessToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents:runQuery`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        // NOTE: no orderBy — an ordered collection-group query requires a
+        // hand-built COLLECTION_GROUP_DESC index (console step + build wait).
+        // An unordered scan needs none; we sort the (few hundred) rows in
+        // memory below.
+        structuredQuery: {
+          from: [{ collectionId: "feedback", allDescendants: true }],
+          limit: 500,
+        },
+      }),
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try { detail = (await resp.text()).slice(0, 400); } catch { /* ignore */ }
+      feedbackWarning = `Feedback query failed (HTTP ${resp.status}). ${detail}`;
+      console.error("[feedback_overview]", feedbackWarning);
+    } else {
+      const data = await resp.json();
+      for (const r of data || []) {
+        const doc = r.document;
+        if (!doc) continue;
+        const parts = String(doc.name || "").split("/");
+        const fid = parts.pop() || "";
+        const fuid = parts.pop() === "feedback" ? (parts.pop() || "") : "";
+        const f = doc.fields || {};
+        items.push({
+          id: fid,
+          uid: f.uid?.stringValue || fuid,
+          email: f.email?.stringValue || "",
+          stars: Number(f.stars?.integerValue ?? f.stars?.doubleValue ?? 0),
+          comment: f.comment?.stringValue || "",
+          answers: Number(f.answers?.integerValue ?? f.answers?.doubleValue ?? 0),
+          createdAt: Number(f.createdAt?.integerValue ?? f.createdAt?.doubleValue ?? 0),
+          createdAtIso: f.createdAtIso?.stringValue || null,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[feedback_overview]", (e as Error).message);
+  }
+
+  // Newest first (in-memory — see no-orderBy note above).
+  items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+  const dist: Record<string, number> = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
+  let sum = 0;
+  let withComments = 0;
+  for (const it of items) {
+    if (it.stars >= 1 && it.stars <= 5) {
+      dist[String(it.stars)]++;
+      sum += it.stars;
+    }
+    if (it.comment) withComments++;
+  }
+  return {
+    enabled,
+    pushActive,
+    pushAt,
+    pushAudience,
+    warning: feedbackWarning,
+    stats: {
+      total: items.length,
+      avg: items.length ? Math.round((sum / items.length) * 10) / 10 : 0,
+      dist,
+      withComments,
+    },
+    items: items.slice(0, 200),
+  };
+}
+
 async function computeUserDetail(uid: string) {
   const [indexDoc, userDoc, pomoDoc] = await Promise.all([
     fsGet(`users_index/${uid}`),
@@ -960,6 +1093,9 @@ export const Route = createFileRoute("/api/admin")({
           if (action === "stats_qbank_breakdown") {
             return json(await computeQbankBreakdown(), 200, cors);
           }
+          if (action === "feedback_overview") {
+            return json(await computeFeedbackOverview(), 200, cors);
+          }
           if (action === "get_ai_providers") {
             const cfg = await loadProvidersConfig(true);
             const meta = Object.fromEntries(
@@ -1130,6 +1266,7 @@ export const Route = createFileRoute("/api/admin")({
           "upgrade", "upgrade_aplus", "downgrade", "reset_quota", "grant_bonus",
           "set_credit_config", "delete_user",
           "set_api_keys", "set_maintenance", "set_payments_settings", "set_auth_settings", "set_peer_stats_settings",
+          "set_feedback_settings", "delete_feedback", "reset_feedback",
           "create_qbank", "delete_qbank", "add_qbank_question", "batch_import_qbank_txt",
           "import_library_json", "delete_library_book", "backfill_concepts_digest",
           "rename_qbank_subject", "rename_qbank_chapter", "batch_rename_qbank_categories"
@@ -1255,6 +1392,102 @@ export const Route = createFileRoute("/api/admin")({
             }
             const settings = await savePeerStatsSettings(body.settings);
             return json({ ok: true, settings }, 200, cors);
+          }
+
+          if (body.action === "set_feedback_settings") {
+            const b = body as any;
+            const patch: Record<string, { booleanValue: boolean } | { integerValue: string }> = {};
+            const mask: string[] = [];
+            let enabledOut: boolean | null = null;
+            let pushOut: boolean | null = null;
+            if (typeof b.enabled === "boolean") {
+              patch.enabled = { booleanValue: b.enabled };
+              mask.push("enabled");
+              enabledOut = b.enabled;
+            }
+            if (typeof b.pushActive === "boolean") {
+              patch.pushActive = { booleanValue: b.pushActive };
+              mask.push("pushActive");
+              pushOut = b.pushActive;
+              if (b.pushActive) {
+                patch.pushAt = { integerValue: String(Date.now()) };
+                mask.push("pushAt");
+              }
+            }
+            if (!mask.length) return json({ error: "Bad request" }, 400, cors);
+            await fsSetMerge("admin/feedback_settings", patch as any);
+            try {
+              const fb = await import("./feedback");
+              (fb as any).invalidateFeedbackSettingsCache?.();
+            } catch { /* same-process cache only; TTL covers the rest */ }
+            return json({ ok: true, enabled: enabledOut, pushActive: pushOut }, 200, cors);
+          }
+          if (body.action === "delete_feedback") {
+            const fuid = String((body as any).uid || "");
+            const fid = String((body as any).id || "");
+            if (!/^[A-Za-z0-9_-]{1,128}$/.test(fuid) || !/^[A-Za-z0-9_-]{1,128}$/.test(fid)) {
+              return json({ error: "Bad request" }, 400, cors);
+            }
+            await fsDeleteDoc(`users/${fuid}/feedback/${fid}`);
+            return json({ ok: true }, 200, cors);
+          }
+          if (body.action === "reset_feedback") {
+            // Testing helper: clear one account's once-forever flag so the
+            // popup can show to it again on next app open (while a push is
+            // active). Keeps their submitted response, if any.
+            try {
+              const emailRaw = String((body as any).email || "").trim();
+              if (!emailRaw || emailRaw.length > 200 || !emailRaw.includes("@")) {
+                return json({ error: "Enter a valid email." }, 400, cors);
+              }
+              const sa = getServiceAccount();
+              const token = await getGoogleAccessToken();
+              let fuid = "";
+              let lookupError = "";
+              for (const variant of [emailRaw, emailRaw.toLowerCase()]) {
+                try {
+                  const qres = await fetch(
+                    `https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents:runQuery`,
+                    {
+                      method: "POST",
+                      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        structuredQuery: {
+                          from: [{ collectionId: "users_index" }],
+                          where: { fieldFilter: { field: { fieldPath: "email" }, op: "EQUAL", value: { stringValue: variant } } },
+                          limit: 1,
+                        },
+                      }),
+                    },
+                  );
+                  if (!qres.ok) {
+                    lookupError = `lookup HTTP ${qres.status}`;
+                    continue;
+                  }
+                  const qd = await qres.json();
+                  const arr = Array.isArray(qd) ? qd : [];
+                  const doc = arr.find((r: any) => r && r.document)?.document;
+                  if (doc) {
+                    fuid = String(doc.name || "").split("/").pop() || "";
+                    if (fuid) break;
+                  }
+                } catch (e) {
+                  lookupError = (e as Error)?.message || "lookup failed";
+                }
+              }
+              if (!fuid) {
+                return json({ error: lookupError ? `Account lookup failed (${lookupError}).` : "No account found for that email." }, lookupError ? 500 : 404, cors);
+              }
+              try {
+                await fsDeleteDoc(`users/${fuid}/meta/feedback_status`);
+              } catch (e) {
+                return json({ error: `Found account but could not clear flag (${(e as Error)?.message || "delete failed"}).` }, 500, cors);
+              }
+              return json({ ok: true, uid: fuid }, 200, cors);
+            } catch (e) {
+              console.error("[reset_feedback]", (e as Error)?.message || e);
+              return json({ error: `Reset failed (${(e as Error)?.message || "unknown error"}).` }, 500, cors);
+            }
           }
 
           if (body.action === "set_ai_providers") {
