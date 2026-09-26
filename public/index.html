@@ -39,6 +39,22 @@
       })();
     </script>
 
+    <script>
+      // Self-heal: this file must only ever be served under /app/*. If a
+      // misconfigured deploy serves it from the site root, the signed-out
+      // boot (initApp(null) -> '/') would reload this same page forever.
+      // Bounce once to the real app URL instead.
+      (function () {
+        try {
+          var p = window.location.pathname;
+          var isHttp = window.location.protocol.indexOf('http') === 0;
+          if (isHttp && (p === '/' || p === '/index.html')) {
+            window.location.replace('/app/index.html');
+          }
+        } catch (e) {}
+      })();
+    </script>
+
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/style.css?v=3">
