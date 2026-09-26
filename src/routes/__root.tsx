@@ -117,7 +117,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           "@context": "https://schema.org",
           "@type": "WebApplication",
           "name": "OmNote",
-          "url": "https://omnote.online",
+          "url": "https://curaq.online",
           "applicationCategory": "EducationalApplication",
           "operatingSystem": "All",
           "description": "Free AI-powered study workspace and best alternative to RemNote. Upload PDFs, generate flashcards, and study smarter.",

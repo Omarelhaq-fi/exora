@@ -13,10 +13,22 @@ function toPublicShape(banks: { id: string; name: string; country: string; kind:
   };
 }
 
+// Public metadata: safe for Cloudflare/Vercel edge caching. Origin has a
+// 30-min in-memory cache + publish invalidation; edge adds a 5-min shared
+// layer so repeated hits never reach Vercel.
+const PUBLIC_CACHE = "public, max-age=60, s-maxage=300, stale-while-revalidate=600";
+
 function json(body: unknown, status: number, cors: Record<string, string>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...cors },
+    headers: {
+      "content-type": "application/json",
+      ...cors,
+      // Ensure CDN-cacheable even if caller forgot the opt (belt & braces).
+      "cache-control": cors["cache-control"] || PUBLIC_CACHE,
+      "cdn-cache-control": cors["cdn-cache-control"] || PUBLIC_CACHE,
+      vary: "Origin, Accept-Encoding",
+    },
   });
 }
 
@@ -28,7 +40,7 @@ export const Route = createFileRoute("/api/public/qbanks")({
         return new Response(null, { status: 204, headers: cors });
       },
       GET: async ({ request }) => {
-        const cors = getCorsHeaders(request, { methods: "GET, OPTIONS" });
+        const cors = getCorsHeaders(request, { methods: "GET, OPTIONS", cacheControl: PUBLIC_CACHE });
         const ip = getClientIp(request);
         const rl = rateLimit(`public-qbanks:${ip}`, 60_000, 60);
         if (!rl.ok) return rateLimitResponse(rl.retryAfter, cors);

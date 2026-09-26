@@ -38,11 +38,28 @@ export function rateLimit(key: string, windowMs: number, max: number): RateResul
   return { ok: true };
 }
 
-// Only trust cf-connecting-ip (Cloudflare-injected, cannot be spoofed by the
-// client). x-forwarded-for and x-real-ip are client-controllable when the
-// request reaches the origin — never use them for rate-limit keys.
+// IP extraction behind Cloudflare -> Vercel.
+// Priority:
+//   1. cf-connecting-ip — injected by Cloudflare, cannot be spoofed when the
+//      orange cloud is on (authoritative client IP).
+//   2. true-client-ip — Cloudflare Enterprise / alternative header.
+//   3. x-forwarded-for (first entry) — set by Vercel's edge when requests come
+//      direct (pre-cutover) or appended by Cloudflare. Only the leftmost entry
+//      added by our trusted edge is used; when behind Cloudflare (1) already
+//      won, so this branch mainly serves direct-to-Vercel traffic.
+// Falls back to "unknown" (single shared bucket) rather than trusting an
+// arbitrary client-supplied value blindly.
 export function getClientIp(request: Request): string {
-  return request.headers.get("cf-connecting-ip") || "unknown";
+  const cf = request.headers.get("cf-connecting-ip")?.trim();
+  if (cf) return cf;
+  const tc = request.headers.get("true-client-ip")?.trim();
+  if (tc) return tc;
+  const xff = request.headers.get("x-forwarded-for")?.trim();
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first && first !== "unknown") return first;
+  }
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
 // Convenience: check multiple limits at once. Returns first failing result.

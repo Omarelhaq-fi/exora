@@ -79,7 +79,115 @@ const BASE_SECURITY_HEADERS: Record<string, string> = {
   "referrer-policy": "strict-origin-when-cross-origin",
 };
 
-function withSecurityHeaders(response: Response): Response {
+// ---------------------------------------------------------------------------
+// Cloudflare / Vercel edge caching.
+//
+// Goal: let Cloudflare absorb all anonymous, cache-safe traffic so Vercel
+// only renders (a) logged-in HTML, (b) private APIs, (c) first miss per edge.
+//
+// What is cached at the edge:
+//   - Hashed static assets (/assets/*, /_build/*, /images/optimized/*,
+//     /app/assets/*) -> 1y immutable.
+//   - favicon/robots/sitemap -> 1 day.
+//   - Marketing HTML (/, /qbanks/*, /privacy-policy, /terms-of-service,
+//     /refund-policy, /contact-us) for ANONYMOUS GET only -> edge 1h +
+//     stale-while-revalidate 1 day. Authenticated requests (Cookie /
+//     Authorization header) bypass via private no-store.
+// NEVER cached: /login, /onboarding, /app/* HTML, /api/* (unless the route
+// itself set an explicit public cache-control, e.g. /api/public/qbanks).
+// ---------------------------------------------------------------------------
+
+const PUBLIC_HTML_RE = /^\/(?:qbanks(?:\/.*)?|privacy-policy\/?|terms-of-service\/?|refund-policy\/?|contact-us\/?)?$/;
+const PRIVATE_PATH_RE = /^\/(?:login|onboarding|app)(?:\/|$)/;
+const IMMUTABLE_PREFIX_RE = /^\/(?:assets|_build|images\/optimized|app\/assets)\//;
+const SEO_FILE_RE = /^\/(?:favicon\.png|robots\.txt|sitemap\.xml)$/;
+const HASHED_FILE_RE = /\.[a-f0-9]{8,}\.(?:js|css|woff2?|ttf|webp|avif|png|jpe?g|svg|ico)$/i;
+
+function getCdnCacheHeaders(request: Request, response: Response): Record<string, string> {
+  // Route set its own policy (public APIs, private R2 payloads) — respect it.
+  // Just mirror to cdn-cache-control when the route only set cache-control.
+  if (response.headers.has("cache-control")) {
+    const cc = response.headers.get("cache-control") || "";
+    if (!response.headers.has("cdn-cache-control") && /public/i.test(cc)) {
+      return { "cdn-cache-control": cc };
+    }
+    return {};
+  }
+
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    return {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "cdn-cache-control": "no-store",
+    };
+  }
+
+  let pathname = "/";
+  try {
+    pathname = new URL(request.url).pathname;
+  } catch {
+    return {};
+  }
+
+  // Error responses are never edge-cached (except 404 HTML falls through to
+  // no-store below anyway).
+  if (response.status >= 400) {
+    return {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "cdn-cache-control": "no-store",
+    };
+  }
+
+  // Private APIs + private pages: never CDN-cache.
+  if (pathname.startsWith("/api/") || PRIVATE_PATH_RE.test(pathname)) {
+    // /api/public/* routes that want caching set their own cache-control and
+    // returned early above — reaching here means "do not cache".
+    return {
+      "cache-control": "private, no-cache, no-store, must-revalidate",
+      "cdn-cache-control": "no-store",
+    };
+  }
+
+  if (IMMUTABLE_PREFIX_RE.test(pathname) || HASHED_FILE_RE.test(pathname)) {
+    return {
+      "cache-control": "public, max-age=31536000, immutable",
+      "cdn-cache-control": "public, max-age=31536000",
+    };
+  }
+
+  if (SEO_FILE_RE.test(pathname)) {
+    return {
+      "cache-control": "public, max-age=86400, stale-while-revalidate=86400",
+      "cdn-cache-control": "public, max-age=86400",
+    };
+  }
+
+  const ct = response.headers.get("content-type") || "";
+  if (ct.includes("text/html") && PUBLIC_HTML_RE.test(pathname)) {
+    // Only cache anonymous renders. Any session cookie / auth header means
+    // personalised HTML — bypass the edge.
+    const hasCookie = (request.headers.get("cookie") || "").trim() !== "";
+    const hasAuth = (request.headers.get("authorization") || "").trim() !== "";
+    if (hasCookie || hasAuth) {
+      return {
+        "cache-control": "private, no-cache, no-store, must-revalidate",
+        "cdn-cache-control": "no-store",
+      };
+    }
+    return {
+      // Browser revalidates every time (max-age=0) but Cloudflare serves
+      // stale-while-revalidate for up to a day — Vercel renders at most
+      // once per hour per edge.
+      "cache-control": "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
+      "cdn-cache-control": "public, max-age=3600",
+      vary: "Cookie, Accept-Encoding",
+    };
+  }
+
+  return {};
+}
+
+function withSecurityHeaders(response: Response, request?: Request): Response {
   const ct = response.headers.get("content-type") || "";
   const isHtml = ct.includes("text/html");
   const extras = isHtml ? HTML_SECURITY_HEADERS : BASE_SECURITY_HEADERS;
@@ -87,6 +195,20 @@ function withSecurityHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const [k, v] of Object.entries(extras)) {
     if (!headers.has(k)) headers.set(k, v);
+  }
+  if (request) {
+    const cacheHeaders = getCdnCacheHeaders(request, response);
+    for (const [k, v] of Object.entries(cacheHeaders)) {
+      if (k === "vary" && headers.has(k)) {
+        const existing = headers.get(k) || "";
+        const merged = new Set(
+          [...existing.split(","), ...v.split(",")].map((s) => s.trim()).filter(Boolean),
+        );
+        headers.set(k, [...merged].join(", "));
+      } else if (!headers.has(k)) {
+        headers.set(k, v);
+      }
+    }
   }
   return new Response(response.body, {
     status: response.status,
@@ -101,7 +223,7 @@ export default {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       const normalized = await normalizeCatastrophicSsrResponse(response);
-      return withSecurityHeaders(normalized);
+      return withSecurityHeaders(normalized, request);
     } catch (error) {
       console.error(error);
       return withSecurityHeaders(
@@ -109,6 +231,7 @@ export default {
           status: 500,
           headers: { "content-type": "text/html; charset=utf-8" },
         }),
+        request,
       );
     }
   },

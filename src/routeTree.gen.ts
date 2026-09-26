@@ -19,6 +19,7 @@ import { Route as TermsOfServiceRouteImport } from './routes/terms-of-service'
 import { Route as ApiActivityRouteImport } from './routes/api/activity'
 import { Route as ApiAdminRouteImport } from './routes/api/admin'
 import { Route as ApiAiRouteImport } from './routes/api/ai'
+import { Route as ApiFeedbackRouteImport } from './routes/api/feedback'
 import { Route as ApiKashierRouteImport } from './routes/api/kashier'
 import { Route as ApiNotificationsRouteImport } from './routes/api/notifications'
 import { Route as ApiPeerStatsRouteImport } from './routes/api/peer-stats'
@@ -85,6 +86,11 @@ const ApiAdminRoute = ApiAdminRouteImport.update({
 const ApiAiRoute = ApiAiRouteImport.update({
   id: '/api/ai',
   path: '/api/ai',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiFeedbackRoute = ApiFeedbackRouteImport.update({
+  id: '/api/feedback',
+  path: '/api/feedback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiKashierRoute = ApiKashierRouteImport.update({
@@ -186,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/api/activity': typeof ApiActivityRoute
   '/api/admin': typeof ApiAdminRoute
   '/api/ai': typeof ApiAiRoute
+  '/api/feedback': typeof ApiFeedbackRoute
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
   '/api/peer-stats': typeof ApiPeerStatsRoute
@@ -215,6 +222,7 @@ export interface FileRoutesByTo {
   '/api/activity': typeof ApiActivityRoute
   '/api/admin': typeof ApiAdminRoute
   '/api/ai': typeof ApiAiRoute
+  '/api/feedback': typeof ApiFeedbackRoute
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
   '/api/peer-stats': typeof ApiPeerStatsRoute
@@ -245,6 +253,7 @@ export interface FileRoutesById {
   '/api/activity': typeof ApiActivityRoute
   '/api/admin': typeof ApiAdminRoute
   '/api/ai': typeof ApiAiRoute
+  '/api/feedback': typeof ApiFeedbackRoute
   '/api/kashier': typeof ApiKashierRoute
   '/api/notifications': typeof ApiNotificationsRoute
   '/api/peer-stats': typeof ApiPeerStatsRoute
@@ -276,6 +285,7 @@ export interface FileRouteTypes {
     | '/api/activity'
     | '/api/admin'
     | '/api/ai'
+    | '/api/feedback'
     | '/api/kashier'
     | '/api/notifications'
     | '/api/peer-stats'
@@ -305,6 +315,7 @@ export interface FileRouteTypes {
     | '/api/activity'
     | '/api/admin'
     | '/api/ai'
+    | '/api/feedback'
     | '/api/kashier'
     | '/api/notifications'
     | '/api/peer-stats'
@@ -334,6 +345,7 @@ export interface FileRouteTypes {
     | '/api/activity'
     | '/api/admin'
     | '/api/ai'
+    | '/api/feedback'
     | '/api/kashier'
     | '/api/notifications'
     | '/api/peer-stats'
@@ -364,6 +376,7 @@ export interface RootRouteChildren {
   ApiActivityRoute: typeof ApiActivityRoute
   ApiAdminRoute: typeof ApiAdminRoute
   ApiAiRoute: typeof ApiAiRoute
+  ApiFeedbackRoute: typeof ApiFeedbackRoute
   ApiKashierRoute: typeof ApiKashierRoute
   ApiNotificationsRoute: typeof ApiNotificationsRoute
   ApiPeerStatsRoute: typeof ApiPeerStatsRoute
@@ -453,6 +466,13 @@ declare module '@tanstack/react-router' {
       path: '/api/ai'
       fullPath: '/api/ai'
       preLoaderRoute: typeof ApiAiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/feedback': {
+      id: '/api/feedback'
+      path: '/api/feedback'
+      fullPath: '/api/feedback'
+      preLoaderRoute: typeof ApiFeedbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/kashier': {
@@ -588,6 +608,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiActivityRoute: ApiActivityRoute,
   ApiAdminRoute: ApiAdminRoute,
   ApiAiRoute: ApiAiRoute,
+  ApiFeedbackRoute: ApiFeedbackRoute,
   ApiKashierRoute: ApiKashierRoute,
   ApiNotificationsRoute: ApiNotificationsRoute,
   ApiPeerStatsRoute: ApiPeerStatsRoute,

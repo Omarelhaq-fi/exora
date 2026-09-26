@@ -6,6 +6,9 @@ const STATIC_ORIGINS: string[] = [
   `https://id-preview--${PROJECT_ID}.lovable.app`,
   `https://project--${PROJECT_ID}.lovable.app`,
   `https://project--${PROJECT_ID}-dev.lovable.app`,
+  "https://curaq.online",
+  "https://www.curaq.online",
+  // Legacy domain kept during migration — remove once DNS fully cut over.
   "https://omnote.online",
   "https://www.omnote.online",
 ];
@@ -36,20 +39,33 @@ function isAllowedOrigin(origin: string): boolean {
 }
 
 export function getCorsHeaders(
-  request: Request,
-  opts: { methods?: string; headers?: string } = {},
+  request?: Request,
+  opts: { methods?: string; headers?: string; cacheControl?: string } = {},
 ): Record<string, string> {
-  const origin = request.headers.get("origin") || "";
-  const allowed = isAllowedOrigin(origin);
+  const origin = request?.headers.get("origin") || "";
+  const allowed = origin ? isAllowedOrigin(origin) : false;
   const h: Record<string, string> = {
     "access-control-allow-methods": opts.methods || "GET, POST, OPTIONS",
     "access-control-allow-headers": opts.headers || "content-type, authorization, x-firebase-appcheck",
     "access-control-max-age": "86400",
-    "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-    "pragma": "no-cache",
-    "expires": "0",
     vary: "Origin",
   };
+  if (opts.cacheControl) {
+    // Public, CDN-cacheable endpoint (e.g. /api/public/qbanks).
+    // Cloudflare honours s-maxage / cdn-cache-control; browsers honour max-age.
+    h["cache-control"] = opts.cacheControl;
+    if (!/no-store|private/i.test(opts.cacheControl)) {
+      h["cdn-cache-control"] = opts.cacheControl;
+    }
+  } else {
+    // Default: private API — never let Cloudflare/Vercel edge cache it.
+    // (Previous version unconditionally forced no-store, which also blocked
+    // caching of the few public endpoints. Callers now opt into caching.)
+    h["cache-control"] = "no-store, no-cache, must-revalidate, proxy-revalidate";
+    h["cdn-cache-control"] = "no-store";
+    h["pragma"] = "no-cache";
+    h["expires"] = "0";
+  }
   if (allowed) h["access-control-allow-origin"] = origin;
   return h;
 }
