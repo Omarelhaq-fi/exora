@@ -3,11 +3,13 @@
   "rewrites": [
     {
       "source": "/",
-      "destination": "/home"
+      "destination": "/home",
+      "check": false
     },
     {
       "source": "/index.html",
-      "destination": "/home"
+      "destination": "/home",
+      "check": false
     }
   ],
   "headers": [
