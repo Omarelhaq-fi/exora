@@ -39,22 +39,6 @@
       })();
     </script>
 
-    <script>
-      // Self-heal: this file must only ever be served under /app/*. If a
-      // misconfigured deploy serves it from the site root, the signed-out
-      // boot (initApp(null) -> '/') would reload this same page forever.
-      // Bounce once to the real app URL instead.
-      (function () {
-        try {
-          var p = window.location.pathname;
-          var isHttp = window.location.protocol.indexOf('http') === 0;
-          if (isHttp && (p === '/' || p === '/index.html')) {
-            window.location.replace('/app/index.html');
-          }
-        } catch (e) {}
-      })();
-    </script>
-
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/style.css?v=3">
@@ -923,55 +907,30 @@
 
         <!-- Scripts -->
     <script src="js/i18n.js"></script>
-    <script src="js/ui-i18n.js"></script>
     <script src="js/ai-client.js"></script>
     <script src="js/session-restore.js"></script>
-    <script src="js/cloze.js"></script>
 
     <script src="js/planner.js?v=1"></script>
-    <script src="js/app.js?v=4"></script>
+    <script src="js/app.js?v=3"></script>
 
     <script src="js/srs.js"></script>
     <script src="js/editor.js"></script>
-    <script src="js/pdf.js"></script>
     <script src="js/ai.js"></script>
-    <script src="js/full-exam.js"></script>
     <script src="js/summary.js?v=1.1"></script>
-    <script src="js/timer.js?v=1"></script>
-    <script src="js/schedule.js?v=1"></script>
-    <script src="js/draw.js"></script>
     <script src="js/flashcards.js?v=1"></script>
-    <script src="js/deck-import.js?v=1"></script>
     <script src="js/welcome.js?v=1"></script>
     <script src="js/rich-render.js?v=4"></script>
     <script src="js/rich-question-editor.js?v=5"></script>
     <script src="js/admin.js?v=17"></script>
     <script src="js/quotas.js?v=1"></script>
     <script src="js/subscription.js?v=1"></script>
-    <script src="js/plan-gate.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/support.js"></script>
-    <script src="js/tour.js"></script>
-    <script src="js/whatsnew.js"></script>
-    <script src="js/import.js"></script>
-    <script src="js/focus-mode.js"></script>
-    <script src="js/book-mode.js?v=2"></script>
-    <script src="js/study-party.js?v=2"></script>
     <script src="js/qbank-party.js?v=1"></script>
     <script src="js/qbank.js?v=33"></script>
-    <script src="js/qbank-mock.js?v=2"></script>
-    <script src="js/library.js?v=1"></script>
+    <script src="js/qbank-mock.js?v=1"></script>
 
-    <script src="js/whiteboard.js?v=1"></script>
-    <script src="js/mindmap.js?v=1"></script>
-    <script src="js/recall.js"></script>
-    <script src="js/goals.js?v=1"></script>
-    <script src="js/radar.js?v=1"></script>
     <script src="js/layout-polish.js"></script>
-    <script src="js/dashboard-ux.js"></script>
-    <script src="js/activity.js"></script>
-    <script src="js/telegram-invite.js?v=1"></script>
-    <script src="js/feedback.js?v=5"></script>
 
 <script src="https://unpkg.com/lucide@0.454.0/dist/umd/lucide.min.js" integrity="sha384-m/CoPp6wBQz6MoZXP+VveuxfvSx0NGXiQyyakzXVOVHgG1fP5bM/UiO4pSNPV6PT" crossorigin="anonymous"></script>
 <script>

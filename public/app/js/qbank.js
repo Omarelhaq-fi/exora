@@ -224,6 +224,13 @@
   });
 
   const pendingApiGets = new Map();
+  // Exposed for Mock Exam builder (qbank-mock.js): full stem pool without
+  // going through a filtered practice session.
+  window.getQBankCachedQuestions = function (qbankId) {
+    const id = qbankId || currentQBankId;
+    return ((cachedQBanks[id] && cachedQBanks[id].questions) || []).slice();
+  };
+  window.getCurrentQBankId = function () { return currentQBankId; };
   // On-demand answers (memory only, never persisted): stems ship in bulk,
   // correctIndices/explanation are fetched per block via get_answers (max 50
   // ids/call, server-throttled). Bulk scrape becomes thousands of calls.
@@ -3130,9 +3137,9 @@
       <!-- STUDY CONCEPT RIGHT COLUMN -->
       <div id="qbank-right-col" style="display:none; flex:1; min-width:0; background:var(--surface-color, #fff); border:1px solid var(--border-color, rgba(0,0,0,0.1)); border-radius:8px; overflow:hidden; flex-direction:column; box-shadow:0 4px 20px rgba(0,0,0,0.05); height: calc(100vh - 120px); position: sticky; top: 80px;">
          <div style="display:flex; border-bottom:1px solid var(--border-color, rgba(0,0,0,0.1)); background:var(--header-bg, rgba(0,0,0,0.02));">
-           <div style="padding:12px 24px; background:var(--surface-color, #fff); border-right:1px solid var(--border-color, rgba(0,0,0,0.1)); border-bottom:2px solid var(--primary-color); font-weight:600; font-size:0.95rem; color:var(--text-primary); cursor:pointer;">
-             Explanation
-           </div>
+            <div style="padding:12px 24px; background:var(--surface-color, #fff); border-right:1px solid var(--border-color, rgba(0,0,0,0.1)); border-bottom:2px solid var(--primary-color); font-weight:600; font-size:0.95rem; color:var(--text-primary); cursor:pointer;">
+              CuraQ Book
+            </div>
            <div style="flex:1;"></div>
            <button class="btn-icon" style="padding:12px; color:var(--text-muted);" onclick="window.closeStudyConcept()" title="Close">
              <i class="fa-solid fa-times"></i>
@@ -4630,19 +4637,49 @@
   // is usable for the requested language. Untagged legacy concepts were
   // generated without any language instruction, i.e. in English.
   window.qbankConceptUsable = function(taggedLang, wantLang) {
-    if (taggedLang) return taggedLang === wantLang;
-    return wantLang === "en";
+    if (taggedLang === wantLang) return true;
+    // "auto" content was generated in the question's own language, so for
+    // the SAME question it is usable no matter which site language the
+    // viewer has set (French question -> French concept, always). Without
+    // this, each site-language setting regenerates + stores a duplicate.
+    if (taggedLang === "auto") return true;
+    // Untagged legacy concepts were generated without any language
+    // instruction, i.e. in English.
+    if (!taggedLang) return wantLang === "en";
+    return false;
   };
 
   window.generateStudyConcept = async function(questionId) {
-    const q = allQuestions.find(q => q.id === questionId);
-    if (!q) return;
+    let q = allQuestions.find(q => q.id === questionId);
+    if (!q) {
+      // Fallback pools: single-question, marked-only, or freshly reloaded
+      // sessions may not have the question in `allQuestions`.
+      try {
+        const pools = [];
+        if (window.currentQuestions) pools.push(window.currentQuestions);
+        if (window.getQBankCachedQuestions) pools.push(window.getQBankCachedQuestions() || []);
+        for (const pool of pools) {
+          const hit = (pool || []).find(x => x && x.id === questionId);
+          if (hit) { q = hit; break; }
+        }
+      } catch (_) {}
+    }
 
     const rightCol = document.getElementById("qbank-right-col");
     const contentDiv = document.getElementById("qbank-study-content");
-    if (!rightCol || !contentDiv) return;
-    
+    if (!rightCol || !contentDiv) { console.warn("[curaq-book] panel elements missing"); return; }
+
+    // Show the panel FIRST so the click always gives instant feedback,
+    // even if the lookup or content load fails below (never fail silently).
     rightCol.style.display = "flex";
+
+    if (!q) {
+      contentDiv.innerHTML = `
+        <div style="background:rgba(244,63,94,0.1); color:#f43f5e; padding:16px; border-radius:8px; border:1px solid rgba(244,63,94,0.2); text-align:center;">
+          Question not found in the loaded bank. Return to the subject list and reopen the question, then try again.
+        </div>`;
+      return;
+    }
 
     const conceptLang = (window.qbankAiLang && window.qbankAiLang()) || "auto";
 
@@ -5517,7 +5554,9 @@
                   ? `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${firstBank.id}', '${safeName}')">Request Access</button>`
                   : (multi
                       ? `<button style="background:#F8FAFC; color:#0F172A; border:1px solid #E2E8F0; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#E2E8F0'" onmouseout="this.style.background='#F8FAFC'" onclick="event.stopPropagation(); window.epShowBanks('${country}', '${safeCol}')">View banks <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`
-                      : `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${firstBank.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`);
+                      : `<span style="display:inline-flex; gap:8px; flex-shrink:0; align-items:center;">`
+                      + `<button title="Timed mock exam with Navigator + Pace" style="background:#fff; color:#007a7a; border:1px solid #007a7a; padding:9px 14px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; flex-shrink:0;" onmouseover="this.style.background='#e6f2f2'" onmouseout="this.style.background='#fff'" onclick="event.stopPropagation(); window.openQBankMockSetup && window.openQBankMockSetup('${firstBank.id}')">Mock Exam</button>`
+                      + `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${firstBank.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button></span>`);
 
               out += `
               <div onclick="${rowAction}" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; cursor:pointer; opacity:${firstBank.locked ? '0.65' : '1'};" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
@@ -5550,7 +5589,9 @@
 
       const actionBtn = q.locked
           ? `<button style="background:#FBEAEA; color:#C62828; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; flex-shrink:0;" onclick="event.stopPropagation(); window.qbankRequestAccess('${q.id}', '${safeName}')">Request Access</button>`
-          : `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${q.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>`;
+          : `<span style="display:inline-flex; gap:8px; flex-shrink:0; align-items:center;">`
+          + `<button title="Timed mock exam with Navigator + Pace" style="background:#fff; color:#007a7a; border:1px solid #007a7a; padding:9px 14px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; flex-shrink:0;" onmouseover="this.style.background='#e6f2f2'" onmouseout="this.style.background='#fff'" onclick="event.stopPropagation(); window.openQBankMockSetup && window.openQBankMockSetup('${q.id}')">Mock Exam</button>`
+          + `<button style="background:#007a7a; color:#fff; border:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; flex-shrink:0;" onmouseover="this.style.background='#006666'" onmouseout="this.style.background='#007a7a'" onclick="event.stopPropagation(); window.startQBankSession('${q.id}', '${safeName}')">Practice <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button></span>`;
 
       return `
       <div onclick="${q.locked ? `window.qbankRequestAccess('${q.id}', '${safeName}')` : `window.startQBankSession('${q.id}', '${safeName}')`}" style="display:flex; align-items:center; gap:10px; padding:10px 6px; margin:0 -6px; border-bottom:1px solid #F1F5F9; border-radius:4px; cursor:pointer; opacity:${q.locked ? '0.65' : '1'};" onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='transparent'">
