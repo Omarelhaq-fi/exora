@@ -1,58 +1,52 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-// Shared landing head — also used by the /home alias route (the site root
-// can be shadowed by a stray static file on some deploys, so vercel.json
-// rewrites "/" -> "/home"; both must render this exact page).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const landingHead = (): any => ({
-  meta: [
-    { title: "CuraQ | Medical QBank" },
-    {
-      name: "description",
-      content:
-        "CuraQ is a Medical QBank featuring high-yield questions across all specialties.",
-    },
-    { property: "og:title", content: "CuraQ | Medical QBank" },
-    {
-      property: "og:description",
-      content:
-        "Practice with our massive clinical question bank, covering all specialties and years.",
-    },
-    { property: "og:type", content: "website" },
-    { name: "twitter:card", content: "summary_large_image" },
-  ],
-  links: [
-    { rel: "preconnect", href: "https://fonts.googleapis.com" },
-    { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-    // LCP hero image, preloaded in the right size (responsive WebP set).
-    {
-      rel: "preload",
-      as: "image",
-      href: "/images/optimized/hero-doctor-1280.webp",
-      imageSrcSet:
-        "/images/optimized/hero-doctor-768.webp 768w, /images/optimized/hero-doctor-1280.webp 1280w, /images/optimized/hero-doctor-1920.webp 1920w",
-      imageSizes: "100vw",
-      // @ts-expect-error fetchpriority is valid on preload links
-      fetchpriority: "high",
-    },
-    {
-      rel: "stylesheet",
-      href: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
-    },
-    {
-      rel: "stylesheet",
-      href: "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap",
-    },
-  ],
-  scripts: [
-    { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" },
-    { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js" },
-  ],
-});
-
 export const Route = createFileRoute("/")({
-  head: landingHead,
+  head: () => ({
+    meta: [
+      { title: "CuraQ | Medical QBank" },
+      {
+        name: "description",
+        content:
+          "CuraQ is a Medical QBank featuring high-yield questions across all specialties.",
+      },
+      { property: "og:title", content: "CuraQ | Medical QBank" },
+      {
+        property: "og:description",
+        content:
+          "Practice with our massive clinical question bank, covering all specialties and years.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+    links: [
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      // LCP hero image, preloaded in the right size (responsive WebP set).
+      {
+        rel: "preload",
+        as: "image",
+        href: "/images/optimized/hero-doctor-1280.webp",
+        imageSrcSet:
+          "/images/optimized/hero-doctor-768.webp 768w, /images/optimized/hero-doctor-1280.webp 1280w, /images/optimized/hero-doctor-1920.webp 1920w",
+        imageSizes: "100vw",
+        // @ts-expect-error fetchpriority is valid on preload links
+        fetchpriority: "high",
+      },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
+      },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap",
+      },
+    ],
+    scripts: [
+      { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" },
+      { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js" },
+    ],
+  }),
   component: Landing,
 });
 
@@ -219,7 +213,7 @@ function SiteHeader({ onSignin, onSignup }: { onSignin: () => void; onSignup: ()
   );
 }
 
-export function Landing() {
+function Landing() {
   const navigate = useNavigate();
   const open = (mode: "signin" | "signup") => {
     navigate({ to: "/login", search: { mode } });
@@ -227,30 +221,16 @@ export function Landing() {
 
   useEffect(() => {
     bootstrapLandingFirebase();
-    let unsub: any;
-    // Attach the auth listener ONCE (the old code re-attached it every
-    // 100ms forever, piling up hundreds of redirect listeners).
     const t = setInterval(() => {
       const w = window as any;
       const fb = w.firebase;
       if (!fb || !fb.auth) return;
-      clearInterval(t);
-      try {
-        unsub = fb.auth().onAuthStateChanged((u: any) => {
-          if (u) window.location.href = APP_URL;
-        });
-      } catch {
-        /* ignore */
-      }
+      let unsub: any;
+      unsub = fb.auth().onAuthStateChanged((u: any) => {
+        if (u) window.location.href = APP_URL;
+      });
     }, 100);
-    return () => {
-      clearInterval(t);
-      try {
-        if (typeof unsub === "function") unsub();
-      } catch {
-        /* ignore */
-      }
-    };
+    return () => clearInterval(t);
   }, []);
 
   return (

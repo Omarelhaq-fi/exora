@@ -11,7 +11,6 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ContactUsRouteImport } from './routes/contact-us'
-import { Route as HomeRouteImport } from './routes/home'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
@@ -32,12 +31,28 @@ import { Route as QbanksEgyptRouteImport } from './routes/qbanks/egypt'
 import { Route as QbanksPlabRouteImport } from './routes/qbanks/plab'
 import { Route as QbanksTunisiaRouteImport } from './routes/qbanks/tunisia'
 import { Route as QbanksUsmleRouteImport } from './routes/qbanks/usmle'
+import { Route as ApiApiActivityRouteImport } from './routes/api/api/activity'
+import { Route as ApiApiAdminRouteImport } from './routes/api/api/admin'
+import { Route as ApiApiAiRouteImport } from './routes/api/api/ai'
+import { Route as ApiApiKashierRouteImport } from './routes/api/api/kashier'
+import { Route as ApiApiNotificationsRouteImport } from './routes/api/api/notifications'
+import { Route as ApiApiPeerStatsRouteImport } from './routes/api/api/peer-stats'
+import { Route as ApiApiQbankRouteImport } from './routes/api/api/qbank'
+import { Route as ApiApiQbank_keyRouteImport } from './routes/api/api/qbank_key'
+import { Route as ApiApiQbank_staticRouteImport } from './routes/api/api/qbank_static'
+import { Route as ApiApiSupportRouteImport } from './routes/api/api/support'
 import { Route as ApiPublicPeerStatsThresholdRouteImport } from './routes/api/public/peer-stats-threshold'
 import { Route as ApiPublicQbanksRouteImport } from './routes/api/public/qbanks'
 import { Route as ApiPublicYoutubeTranscriptRouteImport } from './routes/api/public/youtube-transcript'
+import { Route as ApiApiPublicPeerStatsThresholdRouteImport } from './routes/api/api/public/peer-stats-threshold'
+import { Route as ApiApiPublicQbanksRouteImport } from './routes/api/api/public/qbanks'
+import { Route as ApiApiPublicYoutubeTranscriptRouteImport } from './routes/api/api/public/youtube-transcript'
 import { Route as ApiPublicKashierRenewRouteImport } from './routes/api/public/kashier/renew'
 import { Route as ApiPublicKashierReturnRouteImport } from './routes/api/public/kashier/return'
 import { Route as ApiPublicKashierWebhookRouteImport } from './routes/api/public/kashier/webhook'
+import { Route as ApiApiPublicKashierRenewRouteImport } from './routes/api/api/public/kashier/renew'
+import { Route as ApiApiPublicKashierReturnRouteImport } from './routes/api/api/public/kashier/return'
+import { Route as ApiApiPublicKashierWebhookRouteImport } from './routes/api/api/public/kashier/webhook'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -47,11 +62,6 @@ const IndexRoute = IndexRouteImport.update({
 const ContactUsRoute = ContactUsRouteImport.update({
   id: '/contact-us',
   path: '/contact-us',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const HomeRoute = HomeRouteImport.update({
-  id: '/home',
-  path: '/home',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -154,6 +164,56 @@ const QbanksUsmleRoute = QbanksUsmleRouteImport.update({
   path: '/qbanks/usmle',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiApiActivityRoute = ApiApiActivityRouteImport.update({
+  id: '/api/api/activity',
+  path: '/api/api/activity',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiAdminRoute = ApiApiAdminRouteImport.update({
+  id: '/api/api/admin',
+  path: '/api/api/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiAiRoute = ApiApiAiRouteImport.update({
+  id: '/api/api/ai',
+  path: '/api/api/ai',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiKashierRoute = ApiApiKashierRouteImport.update({
+  id: '/api/api/kashier',
+  path: '/api/api/kashier',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiNotificationsRoute = ApiApiNotificationsRouteImport.update({
+  id: '/api/api/notifications',
+  path: '/api/api/notifications',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiPeerStatsRoute = ApiApiPeerStatsRouteImport.update({
+  id: '/api/api/peer-stats',
+  path: '/api/api/peer-stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiQbankRoute = ApiApiQbankRouteImport.update({
+  id: '/api/api/qbank',
+  path: '/api/api/qbank',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiQbank_keyRoute = ApiApiQbank_keyRouteImport.update({
+  id: '/api/api/qbank_key',
+  path: '/api/api/qbank_key',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiQbank_staticRoute = ApiApiQbank_staticRouteImport.update({
+  id: '/api/api/qbank_static',
+  path: '/api/api/qbank_static',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiSupportRoute = ApiApiSupportRouteImport.update({
+  id: '/api/api/support',
+  path: '/api/api/support',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicPeerStatsThresholdRoute =
   ApiPublicPeerStatsThresholdRouteImport.update({
     id: '/api/public/peer-stats-threshold',
@@ -171,6 +231,23 @@ const ApiPublicYoutubeTranscriptRoute =
     path: '/api/public/youtube-transcript',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiApiPublicPeerStatsThresholdRoute =
+  ApiApiPublicPeerStatsThresholdRouteImport.update({
+    id: '/api/api/public/peer-stats-threshold',
+    path: '/api/api/public/peer-stats-threshold',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiApiPublicQbanksRoute = ApiApiPublicQbanksRouteImport.update({
+  id: '/api/api/public/qbanks',
+  path: '/api/api/public/qbanks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiApiPublicYoutubeTranscriptRoute =
+  ApiApiPublicYoutubeTranscriptRouteImport.update({
+    id: '/api/api/public/youtube-transcript',
+    path: '/api/api/public/youtube-transcript',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicKashierRenewRoute = ApiPublicKashierRenewRouteImport.update({
   id: '/api/public/kashier/renew',
   path: '/api/public/kashier/renew',
@@ -186,11 +263,28 @@ const ApiPublicKashierWebhookRoute = ApiPublicKashierWebhookRouteImport.update({
   path: '/api/public/kashier/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiApiPublicKashierRenewRoute =
+  ApiApiPublicKashierRenewRouteImport.update({
+    id: '/api/api/public/kashier/renew',
+    path: '/api/api/public/kashier/renew',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiApiPublicKashierReturnRoute =
+  ApiApiPublicKashierReturnRouteImport.update({
+    id: '/api/api/public/kashier/return',
+    path: '/api/api/public/kashier/return',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiApiPublicKashierWebhookRoute =
+  ApiApiPublicKashierWebhookRouteImport.update({
+    id: '/api/api/public/kashier/webhook',
+    path: '/api/api/public/kashier/webhook',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
-  '/home': typeof HomeRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
@@ -211,17 +305,32 @@ export interface FileRoutesByFullPath {
   '/qbanks/plab': typeof QbanksPlabRoute
   '/qbanks/tunisia': typeof QbanksTunisiaRoute
   '/qbanks/usmle': typeof QbanksUsmleRoute
+  '/api/api/activity': typeof ApiApiActivityRoute
+  '/api/api/admin': typeof ApiApiAdminRoute
+  '/api/api/ai': typeof ApiApiAiRoute
+  '/api/api/kashier': typeof ApiApiKashierRoute
+  '/api/api/notifications': typeof ApiApiNotificationsRoute
+  '/api/api/peer-stats': typeof ApiApiPeerStatsRoute
+  '/api/api/qbank': typeof ApiApiQbankRoute
+  '/api/api/qbank_key': typeof ApiApiQbank_keyRoute
+  '/api/api/qbank_static': typeof ApiApiQbank_staticRoute
+  '/api/api/support': typeof ApiApiSupportRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
   '/api/public/youtube-transcript': typeof ApiPublicYoutubeTranscriptRoute
+  '/api/api/public/peer-stats-threshold': typeof ApiApiPublicPeerStatsThresholdRoute
+  '/api/api/public/qbanks': typeof ApiApiPublicQbanksRoute
+  '/api/api/public/youtube-transcript': typeof ApiApiPublicYoutubeTranscriptRoute
   '/api/public/kashier/renew': typeof ApiPublicKashierRenewRoute
   '/api/public/kashier/return': typeof ApiPublicKashierReturnRoute
   '/api/public/kashier/webhook': typeof ApiPublicKashierWebhookRoute
+  '/api/api/public/kashier/renew': typeof ApiApiPublicKashierRenewRoute
+  '/api/api/public/kashier/return': typeof ApiApiPublicKashierReturnRoute
+  '/api/api/public/kashier/webhook': typeof ApiApiPublicKashierWebhookRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
-  '/home': typeof HomeRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
@@ -242,18 +351,33 @@ export interface FileRoutesByTo {
   '/qbanks/plab': typeof QbanksPlabRoute
   '/qbanks/tunisia': typeof QbanksTunisiaRoute
   '/qbanks/usmle': typeof QbanksUsmleRoute
+  '/api/api/activity': typeof ApiApiActivityRoute
+  '/api/api/admin': typeof ApiApiAdminRoute
+  '/api/api/ai': typeof ApiApiAiRoute
+  '/api/api/kashier': typeof ApiApiKashierRoute
+  '/api/api/notifications': typeof ApiApiNotificationsRoute
+  '/api/api/peer-stats': typeof ApiApiPeerStatsRoute
+  '/api/api/qbank': typeof ApiApiQbankRoute
+  '/api/api/qbank_key': typeof ApiApiQbank_keyRoute
+  '/api/api/qbank_static': typeof ApiApiQbank_staticRoute
+  '/api/api/support': typeof ApiApiSupportRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
   '/api/public/youtube-transcript': typeof ApiPublicYoutubeTranscriptRoute
+  '/api/api/public/peer-stats-threshold': typeof ApiApiPublicPeerStatsThresholdRoute
+  '/api/api/public/qbanks': typeof ApiApiPublicQbanksRoute
+  '/api/api/public/youtube-transcript': typeof ApiApiPublicYoutubeTranscriptRoute
   '/api/public/kashier/renew': typeof ApiPublicKashierRenewRoute
   '/api/public/kashier/return': typeof ApiPublicKashierReturnRoute
   '/api/public/kashier/webhook': typeof ApiPublicKashierWebhookRoute
+  '/api/api/public/kashier/renew': typeof ApiApiPublicKashierRenewRoute
+  '/api/api/public/kashier/return': typeof ApiApiPublicKashierReturnRoute
+  '/api/api/public/kashier/webhook': typeof ApiApiPublicKashierWebhookRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/contact-us': typeof ContactUsRoute
-  '/home': typeof HomeRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
@@ -274,19 +398,34 @@ export interface FileRoutesById {
   '/qbanks/plab': typeof QbanksPlabRoute
   '/qbanks/tunisia': typeof QbanksTunisiaRoute
   '/qbanks/usmle': typeof QbanksUsmleRoute
+  '/api/api/activity': typeof ApiApiActivityRoute
+  '/api/api/admin': typeof ApiApiAdminRoute
+  '/api/api/ai': typeof ApiApiAiRoute
+  '/api/api/kashier': typeof ApiApiKashierRoute
+  '/api/api/notifications': typeof ApiApiNotificationsRoute
+  '/api/api/peer-stats': typeof ApiApiPeerStatsRoute
+  '/api/api/qbank': typeof ApiApiQbankRoute
+  '/api/api/qbank_key': typeof ApiApiQbank_keyRoute
+  '/api/api/qbank_static': typeof ApiApiQbank_staticRoute
+  '/api/api/support': typeof ApiApiSupportRoute
   '/api/public/peer-stats-threshold': typeof ApiPublicPeerStatsThresholdRoute
   '/api/public/qbanks': typeof ApiPublicQbanksRoute
   '/api/public/youtube-transcript': typeof ApiPublicYoutubeTranscriptRoute
+  '/api/api/public/peer-stats-threshold': typeof ApiApiPublicPeerStatsThresholdRoute
+  '/api/api/public/qbanks': typeof ApiApiPublicQbanksRoute
+  '/api/api/public/youtube-transcript': typeof ApiApiPublicYoutubeTranscriptRoute
   '/api/public/kashier/renew': typeof ApiPublicKashierRenewRoute
   '/api/public/kashier/return': typeof ApiPublicKashierReturnRoute
   '/api/public/kashier/webhook': typeof ApiPublicKashierWebhookRoute
+  '/api/api/public/kashier/renew': typeof ApiApiPublicKashierRenewRoute
+  '/api/api/public/kashier/return': typeof ApiApiPublicKashierReturnRoute
+  '/api/api/public/kashier/webhook': typeof ApiApiPublicKashierWebhookRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/contact-us'
-    | '/home'
     | '/login'
     | '/onboarding'
     | '/privacy-policy'
@@ -307,17 +446,32 @@ export interface FileRouteTypes {
     | '/qbanks/plab'
     | '/qbanks/tunisia'
     | '/qbanks/usmle'
+    | '/api/api/activity'
+    | '/api/api/admin'
+    | '/api/api/ai'
+    | '/api/api/kashier'
+    | '/api/api/notifications'
+    | '/api/api/peer-stats'
+    | '/api/api/qbank'
+    | '/api/api/qbank_key'
+    | '/api/api/qbank_static'
+    | '/api/api/support'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
     | '/api/public/youtube-transcript'
+    | '/api/api/public/peer-stats-threshold'
+    | '/api/api/public/qbanks'
+    | '/api/api/public/youtube-transcript'
     | '/api/public/kashier/renew'
     | '/api/public/kashier/return'
     | '/api/public/kashier/webhook'
+    | '/api/api/public/kashier/renew'
+    | '/api/api/public/kashier/return'
+    | '/api/api/public/kashier/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/contact-us'
-    | '/home'
     | '/login'
     | '/onboarding'
     | '/privacy-policy'
@@ -338,17 +492,32 @@ export interface FileRouteTypes {
     | '/qbanks/plab'
     | '/qbanks/tunisia'
     | '/qbanks/usmle'
+    | '/api/api/activity'
+    | '/api/api/admin'
+    | '/api/api/ai'
+    | '/api/api/kashier'
+    | '/api/api/notifications'
+    | '/api/api/peer-stats'
+    | '/api/api/qbank'
+    | '/api/api/qbank_key'
+    | '/api/api/qbank_static'
+    | '/api/api/support'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
     | '/api/public/youtube-transcript'
+    | '/api/api/public/peer-stats-threshold'
+    | '/api/api/public/qbanks'
+    | '/api/api/public/youtube-transcript'
     | '/api/public/kashier/renew'
     | '/api/public/kashier/return'
     | '/api/public/kashier/webhook'
+    | '/api/api/public/kashier/renew'
+    | '/api/api/public/kashier/return'
+    | '/api/api/public/kashier/webhook'
   id:
     | '__root__'
     | '/'
     | '/contact-us'
-    | '/home'
     | '/login'
     | '/onboarding'
     | '/privacy-policy'
@@ -369,18 +538,33 @@ export interface FileRouteTypes {
     | '/qbanks/plab'
     | '/qbanks/tunisia'
     | '/qbanks/usmle'
+    | '/api/api/activity'
+    | '/api/api/admin'
+    | '/api/api/ai'
+    | '/api/api/kashier'
+    | '/api/api/notifications'
+    | '/api/api/peer-stats'
+    | '/api/api/qbank'
+    | '/api/api/qbank_key'
+    | '/api/api/qbank_static'
+    | '/api/api/support'
     | '/api/public/peer-stats-threshold'
     | '/api/public/qbanks'
     | '/api/public/youtube-transcript'
+    | '/api/api/public/peer-stats-threshold'
+    | '/api/api/public/qbanks'
+    | '/api/api/public/youtube-transcript'
     | '/api/public/kashier/renew'
     | '/api/public/kashier/return'
     | '/api/public/kashier/webhook'
+    | '/api/api/public/kashier/renew'
+    | '/api/api/public/kashier/return'
+    | '/api/api/public/kashier/webhook'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ContactUsRoute: typeof ContactUsRoute
-  HomeRoute: typeof HomeRoute
   LoginRoute: typeof LoginRoute
   OnboardingRoute: typeof OnboardingRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
@@ -401,12 +585,28 @@ export interface RootRouteChildren {
   QbanksPlabRoute: typeof QbanksPlabRoute
   QbanksTunisiaRoute: typeof QbanksTunisiaRoute
   QbanksUsmleRoute: typeof QbanksUsmleRoute
+  ApiApiActivityRoute: typeof ApiApiActivityRoute
+  ApiApiAdminRoute: typeof ApiApiAdminRoute
+  ApiApiAiRoute: typeof ApiApiAiRoute
+  ApiApiKashierRoute: typeof ApiApiKashierRoute
+  ApiApiNotificationsRoute: typeof ApiApiNotificationsRoute
+  ApiApiPeerStatsRoute: typeof ApiApiPeerStatsRoute
+  ApiApiQbankRoute: typeof ApiApiQbankRoute
+  ApiApiQbank_keyRoute: typeof ApiApiQbank_keyRoute
+  ApiApiQbank_staticRoute: typeof ApiApiQbank_staticRoute
+  ApiApiSupportRoute: typeof ApiApiSupportRoute
   ApiPublicPeerStatsThresholdRoute: typeof ApiPublicPeerStatsThresholdRoute
   ApiPublicQbanksRoute: typeof ApiPublicQbanksRoute
   ApiPublicYoutubeTranscriptRoute: typeof ApiPublicYoutubeTranscriptRoute
+  ApiApiPublicPeerStatsThresholdRoute: typeof ApiApiPublicPeerStatsThresholdRoute
+  ApiApiPublicQbanksRoute: typeof ApiApiPublicQbanksRoute
+  ApiApiPublicYoutubeTranscriptRoute: typeof ApiApiPublicYoutubeTranscriptRoute
   ApiPublicKashierRenewRoute: typeof ApiPublicKashierRenewRoute
   ApiPublicKashierReturnRoute: typeof ApiPublicKashierReturnRoute
   ApiPublicKashierWebhookRoute: typeof ApiPublicKashierWebhookRoute
+  ApiApiPublicKashierRenewRoute: typeof ApiApiPublicKashierRenewRoute
+  ApiApiPublicKashierReturnRoute: typeof ApiApiPublicKashierReturnRoute
+  ApiApiPublicKashierWebhookRoute: typeof ApiApiPublicKashierWebhookRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -423,13 +623,6 @@ declare module '@tanstack/react-router' {
       path: '/contact-us'
       fullPath: '/contact-us'
       preLoaderRoute: typeof ContactUsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/home': {
-      id: '/home'
-      path: '/home'
-      fullPath: '/home'
-      preLoaderRoute: typeof HomeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -572,6 +765,76 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof QbanksUsmleRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/api/activity': {
+      id: '/api/api/activity'
+      path: '/api/api/activity'
+      fullPath: '/api/api/activity'
+      preLoaderRoute: typeof ApiApiActivityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/admin': {
+      id: '/api/api/admin'
+      path: '/api/api/admin'
+      fullPath: '/api/api/admin'
+      preLoaderRoute: typeof ApiApiAdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/ai': {
+      id: '/api/api/ai'
+      path: '/api/api/ai'
+      fullPath: '/api/api/ai'
+      preLoaderRoute: typeof ApiApiAiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/kashier': {
+      id: '/api/api/kashier'
+      path: '/api/api/kashier'
+      fullPath: '/api/api/kashier'
+      preLoaderRoute: typeof ApiApiKashierRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/notifications': {
+      id: '/api/api/notifications'
+      path: '/api/api/notifications'
+      fullPath: '/api/api/notifications'
+      preLoaderRoute: typeof ApiApiNotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/peer-stats': {
+      id: '/api/api/peer-stats'
+      path: '/api/api/peer-stats'
+      fullPath: '/api/api/peer-stats'
+      preLoaderRoute: typeof ApiApiPeerStatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/qbank': {
+      id: '/api/api/qbank'
+      path: '/api/api/qbank'
+      fullPath: '/api/api/qbank'
+      preLoaderRoute: typeof ApiApiQbankRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/qbank_key': {
+      id: '/api/api/qbank_key'
+      path: '/api/api/qbank_key'
+      fullPath: '/api/api/qbank_key'
+      preLoaderRoute: typeof ApiApiQbank_keyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/qbank_static': {
+      id: '/api/api/qbank_static'
+      path: '/api/api/qbank_static'
+      fullPath: '/api/api/qbank_static'
+      preLoaderRoute: typeof ApiApiQbank_staticRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/support': {
+      id: '/api/api/support'
+      path: '/api/api/support'
+      fullPath: '/api/api/support'
+      preLoaderRoute: typeof ApiApiSupportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/peer-stats-threshold': {
       id: '/api/public/peer-stats-threshold'
       path: '/api/public/peer-stats-threshold'
@@ -591,6 +854,27 @@ declare module '@tanstack/react-router' {
       path: '/api/public/youtube-transcript'
       fullPath: '/api/public/youtube-transcript'
       preLoaderRoute: typeof ApiPublicYoutubeTranscriptRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/public/peer-stats-threshold': {
+      id: '/api/api/public/peer-stats-threshold'
+      path: '/api/api/public/peer-stats-threshold'
+      fullPath: '/api/api/public/peer-stats-threshold'
+      preLoaderRoute: typeof ApiApiPublicPeerStatsThresholdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/public/qbanks': {
+      id: '/api/api/public/qbanks'
+      path: '/api/api/public/qbanks'
+      fullPath: '/api/api/public/qbanks'
+      preLoaderRoute: typeof ApiApiPublicQbanksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/public/youtube-transcript': {
+      id: '/api/api/public/youtube-transcript'
+      path: '/api/api/public/youtube-transcript'
+      fullPath: '/api/api/public/youtube-transcript'
+      preLoaderRoute: typeof ApiApiPublicYoutubeTranscriptRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/kashier/renew': {
@@ -614,13 +898,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicKashierWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/api/public/kashier/renew': {
+      id: '/api/api/public/kashier/renew'
+      path: '/api/api/public/kashier/renew'
+      fullPath: '/api/api/public/kashier/renew'
+      preLoaderRoute: typeof ApiApiPublicKashierRenewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/public/kashier/return': {
+      id: '/api/api/public/kashier/return'
+      path: '/api/api/public/kashier/return'
+      fullPath: '/api/api/public/kashier/return'
+      preLoaderRoute: typeof ApiApiPublicKashierReturnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api/public/kashier/webhook': {
+      id: '/api/api/public/kashier/webhook'
+      path: '/api/api/public/kashier/webhook'
+      fullPath: '/api/api/public/kashier/webhook'
+      preLoaderRoute: typeof ApiApiPublicKashierWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ContactUsRoute: ContactUsRoute,
-  HomeRoute: HomeRoute,
   LoginRoute: LoginRoute,
   OnboardingRoute: OnboardingRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
@@ -641,12 +945,28 @@ const rootRouteChildren: RootRouteChildren = {
   QbanksPlabRoute: QbanksPlabRoute,
   QbanksTunisiaRoute: QbanksTunisiaRoute,
   QbanksUsmleRoute: QbanksUsmleRoute,
+  ApiApiActivityRoute: ApiApiActivityRoute,
+  ApiApiAdminRoute: ApiApiAdminRoute,
+  ApiApiAiRoute: ApiApiAiRoute,
+  ApiApiKashierRoute: ApiApiKashierRoute,
+  ApiApiNotificationsRoute: ApiApiNotificationsRoute,
+  ApiApiPeerStatsRoute: ApiApiPeerStatsRoute,
+  ApiApiQbankRoute: ApiApiQbankRoute,
+  ApiApiQbank_keyRoute: ApiApiQbank_keyRoute,
+  ApiApiQbank_staticRoute: ApiApiQbank_staticRoute,
+  ApiApiSupportRoute: ApiApiSupportRoute,
   ApiPublicPeerStatsThresholdRoute: ApiPublicPeerStatsThresholdRoute,
   ApiPublicQbanksRoute: ApiPublicQbanksRoute,
   ApiPublicYoutubeTranscriptRoute: ApiPublicYoutubeTranscriptRoute,
+  ApiApiPublicPeerStatsThresholdRoute: ApiApiPublicPeerStatsThresholdRoute,
+  ApiApiPublicQbanksRoute: ApiApiPublicQbanksRoute,
+  ApiApiPublicYoutubeTranscriptRoute: ApiApiPublicYoutubeTranscriptRoute,
   ApiPublicKashierRenewRoute: ApiPublicKashierRenewRoute,
   ApiPublicKashierReturnRoute: ApiPublicKashierReturnRoute,
   ApiPublicKashierWebhookRoute: ApiPublicKashierWebhookRoute,
+  ApiApiPublicKashierRenewRoute: ApiApiPublicKashierRenewRoute,
+  ApiApiPublicKashierReturnRoute: ApiApiPublicKashierReturnRoute,
+  ApiApiPublicKashierWebhookRoute: ApiApiPublicKashierWebhookRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
