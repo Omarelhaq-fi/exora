@@ -1,17 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/",
-      "destination": "/home",
-      "check": false
-    },
-    {
-      "source": "/index.html",
-      "destination": "/home",
-      "check": false
-    }
-  ],
   "headers": [
     {
       "source": "/assets/(.*)",
