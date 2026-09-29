@@ -213,7 +213,7 @@ function SiteHeader({ onSignin, onSignup }: { onSignin: () => void; onSignup: ()
   );
 }
 
-function Landing() {
+export function Landing() {
   const navigate = useNavigate();
   const open = (mode: "signin" | "signup") => {
     navigate({ to: "/login", search: { mode } });
