@@ -4,10 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CuraQ | Medical QBank for Med Students</title>
-    <meta name="description" content="CuraQ Medical QBank for med students. Practice high-yield clinical questions, generate flashcards, and master medical concepts.">
-    <link rel="icon" type="image/png" href="assets/logo.png">
-    <link rel="apple-touch-icon" href="assets/logo.png">
+    <title>CuraQ | Free AI Study Workspace for Med Students</title>
+    <meta name="description" content="The best free alternative to RemNote. An intelligent, AI-powered study workspace tailored for med students. Upload PDFs, generate flashcards, and master medical concepts for free.">
     <!-- JSON-LD Structured Data -->
     <script type="application/ld+json">
     {
@@ -17,7 +15,12 @@
       "url": "https://curaq.online/app/",
       "applicationCategory": "EducationalApplication",
       "operatingSystem": "All",
-      "description": "CuraQ Medical QBank for med students. Practice high-yield clinical questions, generate flashcards, and study smarter."
+      "description": "Free AI-powered study workspace and best alternative to RemNote. Upload PDFs, generate flashcards, and study smarter.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
     }
     </script>
    <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
@@ -257,10 +260,6 @@
             <i class="fa-solid fa-graduation-cap text-[16px] w-6 text-center mr-3"></i>
             <span class="font-sans text-[14px]">Exam Prep</span>
         </a>
-        <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="mock-exam" href="#" onclick="window.openQBankMockSetup && window.openQBankMockSetup(); return false;">
-            <i class="fa-solid fa-stopwatch text-[16px] w-6 text-center mr-3"></i>
-            <span class="font-sans text-[14px]">Mock Exam</span>
-        </a>
         <a class="flex items-center w-full px-4 py-2.5 mb-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors font-medium" data-path="flashcards" href="#" onclick="window.openFlashcardsExplorer && window.openFlashcardsExplorer();">
             <i class="fa-solid fa-layer-group text-[16px] w-6 text-center mr-3"></i>
             <span class="font-sans text-[14px]">Flashcards</span>
@@ -302,7 +301,7 @@
     <div class="flex-1 max-w-2xl mr-6">
         <div class="relative flex items-center group w-full">
             <i class="fa-solid fa-search absolute left-3 text-gray-400 text-[14px]"></i>
-            <input id="home-search-input" class="w-full h-9 pl-9 pr-12 bg-gray-50 border border-transparent rounded text-gray-800 text-[13px] focus:outline-none focus:bg-white focus:border-[#007a7a] focus:ring-1 focus:ring-[#007a7a] transition-all placeholder-gray-400" placeholder="Search subjects, chapters, or question IDs..." type="text" onkeydown="window.handleHomeSearch && window.handleHomeSearch(event)" oninput="window.handleHomeSearchInput && window.handleHomeSearchInput(event)" onfocus="window.handleHomeSearchFocus && window.handleHomeSearchFocus(event)"/>
+            <input id="home-search-input" class="w-full h-9 pl-9 pr-12 bg-gray-50 border border-transparent rounded text-gray-800 text-[13px] focus:outline-none focus:bg-white focus:border-[#007a7a] focus:ring-1 focus:ring-[#007a7a] transition-all placeholder-gray-400" placeholder="Search subjects, chapters..." type="text" onkeydown="window.handleHomeSearch && window.handleHomeSearch(event)" oninput="window.handleHomeSearchInput && window.handleHomeSearchInput(event)" onfocus="window.handleHomeSearchFocus && window.handleHomeSearchFocus(event)"/>
             <div class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 text-[11px] font-semibold">Ctrl K</div>
             <div id="home-search-dropdown" class="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-lg z-[1001] hidden max-h-80 overflow-y-auto rounded-b mt-1"></div>
         </div>
@@ -907,30 +906,54 @@
 
         <!-- Scripts -->
     <script src="js/i18n.js"></script>
+    <script src="js/ui-i18n.js"></script>
     <script src="js/ai-client.js"></script>
     <script src="js/session-restore.js"></script>
+    <script src="js/cloze.js"></script>
 
     <script src="js/planner.js?v=1"></script>
     <script src="js/app.js?v=3"></script>
 
     <script src="js/srs.js"></script>
     <script src="js/editor.js"></script>
+    <script src="js/pdf.js"></script>
     <script src="js/ai.js"></script>
+    <script src="js/full-exam.js"></script>
     <script src="js/summary.js?v=1.1"></script>
+    <script src="js/timer.js"></script>
+    <script src="js/schedule.js"></script>
+    <script src="js/draw.js"></script>
     <script src="js/flashcards.js?v=1"></script>
+    <script src="js/deck-import.js?v=1"></script>
     <script src="js/welcome.js?v=1"></script>
     <script src="js/rich-render.js?v=4"></script>
     <script src="js/rich-question-editor.js?v=5"></script>
     <script src="js/admin.js?v=17"></script>
-    <script src="js/quotas.js?v=1"></script>
-    <script src="js/subscription.js?v=1"></script>
+    <script src="js/quotas.js"></script>
+    <script src="js/subscription.js"></script>
+    <script src="js/plan-gate.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/support.js"></script>
+    <script src="js/tour.js"></script>
+    <script src="js/whatsnew.js"></script>
+    <script src="js/import.js"></script>
+    <script src="js/focus-mode.js"></script>
+    <script src="js/book-mode.js?v=2"></script>
+    <script src="js/study-party.js?v=2"></script>
     <script src="js/qbank-party.js?v=1"></script>
-    <script src="js/qbank.js?v=33"></script>
-    <script src="js/qbank-mock.js?v=1"></script>
+    <script src="js/qbank.js?v=32"></script>
+    <script src="js/library.js?v=1"></script>
 
+    <script src="js/whiteboard.js"></script>
+    <script src="js/mindmap.js"></script>
+    <script src="js/recall.js"></script>
+    <script src="js/goals.js"></script>
+    <script src="js/radar.js"></script>
     <script src="js/layout-polish.js"></script>
+    <script src="js/dashboard-ux.js"></script>
+    <script src="js/activity.js"></script>
+    <script src="js/telegram-invite.js?v=1"></script>
+    <script src="js/feedback.js?v=5"></script>
 
 <script src="https://unpkg.com/lucide@0.454.0/dist/umd/lucide.min.js" integrity="sha384-m/CoPp6wBQz6MoZXP+VveuxfvSx0NGXiQyyakzXVOVHgG1fP5bM/UiO4pSNPV6PT" crossorigin="anonymous"></script>
 <script>

@@ -11,7 +11,7 @@
   window.planBadgeHTML = function (plan) {
     const raw = String(plan || "free").toLowerCase();
     const p = (raw === "supporter") ? "pro" : (raw === "supporter+" || raw === "ultimate") ? "aplus" : raw;
-    const label = p === "aplus" ? "SUPPORTER+" : p === "pro" ? "SUPPORTER" : "";
+    const label = p === "aplus" ? "SUPPORTER+" : p === "pro" ? "SUPPORTER" : "FREE";
     const t = planTone(p);
     return `<span style="background:${t.grad};color:${t.text};padding:2px 9px;border-radius:999px;font-size:0.65rem;font-weight:800;letter-spacing:0.06em;">${label}</span>`;
   };
@@ -95,8 +95,8 @@
           if (desc) desc.textContent = "Thank you for supporting OmNote! Upgrade to Supporter+ to unlock priority support and more.";
           if (btnLabel) btnLabel.textContent = "Supporter+";
         } else {
-          if (title) title.textContent = "Support OmNote";
-          if (desc) desc.textContent = "Support the website to help keep our servers running and unlock exclusive features!";
+          if (title) title.textContent = "Keep OmNote Free";
+          if (desc) desc.textContent = "OmNote is 100% free to use. Support the website to help keep our servers running and unlock exclusive features!";
           if (btnLabel) btnLabel.textContent = "Become a Supporter";
         }
       }
@@ -134,10 +134,10 @@
     const featLabel = FEATURE_LABELS[feature] || info.featureLabel || feature || "This feature";
     const scope = info.reason === "feature_cap_daily" ? "today" : info.reason === "feature_cap_monthly" ? "this month" : "";
     const resetTxt = info.resetIso ? new Date(info.resetIso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-    const title = isCap ? `Limit reached for ${featLabel}` : "Out of AI credits";
+    const title = isCap ? `Free limit reached for ${featLabel}` : "Out of AI credits";
     const sub = isCap
-      ? `You've used ${scope}'s allowance (${info.cap || 0}). ${resetTxt ? "Resets " + resetTxt + ". " : ""}Supporter & Supporter+ have no per-feature limits.`
-      : `Your monthly credits refresh next month.`;
+      ? `You've used ${scope}'s Free allowance (${info.cap || 0}). ${resetTxt ? "Resets " + resetTxt + ". " : ""}Supporter & Supporter+ have no per-feature limits.`
+      : `Your ${window.planBadgeHTML(p)} monthly credits refresh next month.`;
     toast.innerHTML = `
       <div style="background:linear-gradient(160deg,#0f172a,#1e293b);border:1px solid rgba(6,182,212,0.4);border-radius:14px;padding:14px 16px;box-shadow:0 20px 60px rgba(0,0,0,0.5);color:#f1f5f9;display:flex;align-items:center;gap:12px;">
         <div style="font-size:1.4rem;"><i data-lucide="zap"></i></div>

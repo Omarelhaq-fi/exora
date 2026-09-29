@@ -161,7 +161,7 @@
     if (r) {
       r.textContent =
         reason === "feature_cap" || reason === "feature_cap_daily" || reason === "feature_cap_monthly" || reason === "feature_exceeded"
-          ? "You've hit today's limit for this feature — upgrade to Supporter to remove per-feature caps."
+          ? "You've hit today's Free-tier limit for this feature — upgrade to Supporter to remove per-feature caps."
           : reason === "insufficient_credits" || reason === "quota_exceeded"
           ? "You're out of AI credits — upgrade for more monthly credits."
           : reason === "pro_required"
@@ -283,7 +283,7 @@
     }
     const raw = String(s.plan || "free").toLowerCase();
     const p = (raw === "supporter") ? "pro" : (raw === "supporter+" || raw === "ultimate") ? "aplus" : raw;
-    const planBadge = window.planBadgeHTML ? window.planBadgeHTML(p) : (p === "pro" ? "SUPPORTER" : p === "aplus" ? "SUPPORTER+" : "");
+    const planBadge = window.planBadgeHTML ? window.planBadgeHTML(p) : (p === "pro" ? "SUPPORTER" : p === "aplus" ? "SUPPORTER+" : "FREE");
     const untilLine = s.proUntil
       ? `<div style="color:#aab0c6;font-size:0.72rem;margin-top:3px;">${p === "aplus" ? "Supporter+" : "Supporter"} until ${new Date(s.proUntil).toLocaleDateString()}</div>`
       : "";
@@ -439,12 +439,12 @@
       const title = isPro
         ? "This feature is for Supporters"
         : isFeatureCap
-          ? "Daily limit reached"
+          ? "Daily free limit reached"
           : "Usage limit reached";
       const sub = isPro
         ? "Become a Supporter to unlock this feature."
         : isFeatureCap
-          ? (rawMsg || "You've hit today's limit for this feature. Upgrade to Supporter to remove per-feature caps.")
+          ? (rawMsg || "You've hit today's free-tier limit for this feature. Upgrade to Supporter to remove per-feature caps.")
           : "Upgrade to Supporter to remove usage caps and unlock all features.";
       const cta = isPro ? "pro_required" : isFeatureCap ? "feature_cap" : "insufficient_credits";
       return `
