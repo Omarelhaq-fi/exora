@@ -1,52 +1,54 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+export const landingHead = () => ({
+  meta: [
+    { title: "CuraQ | Free Medical QBank" },
+    {
+      name: "description",
+      content:
+        "CuraQ is a free Medical QBank featuring high-yield questions across all specialties. 100% free forever.",
+    },
+    { property: "og:title", content: "CuraQ | Free Medical QBank" },
+    {
+      property: "og:description",
+      content:
+        "Practice with our massive clinical question bank, covering all specialties and years. 100% free forever.",
+    },
+    { property: "og:type", content: "website" },
+    { name: "twitter:card", content: "summary_large_image" },
+  ],
+  links: [
+    { rel: "preconnect", href: "https://fonts.googleapis.com" },
+    { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+    // LCP hero image, preloaded in the right size (responsive WebP set).
+    {
+      rel: "preload",
+      as: "image",
+      href: "/images/optimized/hero-doctor-1280.webp",
+      imageSrcSet:
+        "/images/optimized/hero-doctor-768.webp 768w, /images/optimized/hero-doctor-1280.webp 1280w, /images/optimized/hero-doctor-1920.webp 1920w",
+      imageSizes: "100vw",
+      // @ts-expect-error fetchpriority is valid on preload links
+      fetchpriority: "high",
+    },
+    {
+      rel: "stylesheet",
+      href: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
+    },
+    {
+      rel: "stylesheet",
+      href: "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap",
+    },
+  ],
+  scripts: [
+    { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" },
+    { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js" },
+  ],
+});
+
 export const Route = createFileRoute("/")({
-  head: () => ({
-    meta: [
-      { title: "CuraQ | Free Medical QBank" },
-      {
-        name: "description",
-        content:
-          "CuraQ is a free Medical QBank featuring high-yield questions across all specialties. 100% free forever.",
-      },
-      { property: "og:title", content: "CuraQ | Free Medical QBank" },
-      {
-        property: "og:description",
-        content:
-          "Practice with our massive clinical question bank, covering all specialties and years. 100% free forever.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-    links: [
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      // LCP hero image, preloaded in the right size (responsive WebP set).
-      {
-        rel: "preload",
-        as: "image",
-        href: "/images/optimized/hero-doctor-1280.webp",
-        imageSrcSet:
-          "/images/optimized/hero-doctor-768.webp 768w, /images/optimized/hero-doctor-1280.webp 1280w, /images/optimized/hero-doctor-1920.webp 1920w",
-        imageSizes: "100vw",
-        // @ts-expect-error fetchpriority is valid on preload links
-        fetchpriority: "high",
-      },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
-      },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap",
-      },
-    ],
-    scripts: [
-      { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" },
-      { src: "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js" },
-    ],
-  }),
+  head: landingHead,
   component: Landing,
 });
 
