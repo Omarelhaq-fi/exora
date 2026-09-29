@@ -392,7 +392,7 @@ function LoginPage() {
             </h1>
             <p className="text-[13px] leading-[1.6] font-medium text-slate-500 text-center mt-2 mb-6">
               {isSignup
-                ? "Start learning smarter."
+                ? "Start learning smarter, free forever."
                 : "Let's get you signed in securely."}
             </p>
 
