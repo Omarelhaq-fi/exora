@@ -308,11 +308,8 @@ function _performSearch(query) {
         return;
     }
     
-    // Question-ID search is DISABLED to save Firestore reads.
-    // Any random typing previously triggered a server get_question lookup
-    // (index build = tens of thousands of reads). Local subject/chapter
-    // search below costs 0 reads.
-    const looksLikeId = false;
+    // Check if it looks like a question ID (alphanumeric, 3-64 chars)
+    const looksLikeId = /^[A-Za-z0-9_-]{3,64}$/.test(q);
     
     // Get current qbank data
     const activeQBankId = window.db && window.db.selectedQBankId;
@@ -407,10 +404,10 @@ function _performSearch(query) {
     _searchResults = results;
     _searchActiveIndex = -1;
     
-    if (results.length === 0) {
+    if (results.length === 0 && !looksLikeId) {
         _showSearchDropdown('<div class="search-no-results">No subjects or chapters found</div>');
     } else {
-        _renderSearchResults(results, q, false);
+        _renderSearchResults(results, q, looksLikeId);
     }
 }
 
@@ -479,9 +476,21 @@ function _loadQBankFromCache(qbankId) {
 }
 
 function _renderSearchResults(results, query, showIdOption) {
-    // NOTE: showIdOption is intentionally ignored — question-ID search is
-    // disabled to save Firestore reads. Only local subject/chapter results.
     let html = '';
+    
+    if (showIdOption) {
+        html += `<div class="search-section-header">Search by Question ID</div>`;
+        html += `
+            <div class="search-suggestion-item" data-action="search-id" data-id="${_escHtml(query)}">
+                <div class="suggestion-icon question">
+                    <i class="fa-solid fa-search" style="font-size:12px;"></i>
+                </div>
+                <div class="suggestion-text">
+                    <div class="suggestion-title">Search for "${_escHtml(query)}"</div>
+                    <div class="suggestion-subtitle">Press Enter to search by question ID or code</div>
+                </div>
+            </div>`;
+    }
     
     const subjects = results.filter(r => r.type === 'subject');
     const chapters = results.filter(r => r.type === 'chapter');
@@ -539,8 +548,8 @@ function _renderSearchResults(results, query, showIdOption) {
                 const subject = el.getAttribute('data-subject');
                 _openChapterInQBank(subject, name);
             } else if (action === 'search-id') {
-                // Disabled: question-ID search removed to save Firestore reads.
-                _closeSearchDropdown();
+                const id = el.getAttribute('data-id');
+                _searchQuestionById(id);
             }
         });
     });
@@ -549,7 +558,7 @@ function _renderSearchResults(results, query, showIdOption) {
 function _openSubjectInQBank(subjectName) {
     _closeSearchDropdown();
     const input = _getSearchInput();
-    if (input) { input.value = ''; input.placeholder = 'Search subjects, chapters...'; }
+    if (input) { input.value = ''; input.placeholder = 'Search subjects, chapters, or question ID...'; }
     
     if (!window.db || !window.db.selectedQBankId) {
         if (window.openQBankSelection) window.openQBankSelection();
@@ -568,7 +577,7 @@ function _openSubjectInQBank(subjectName) {
 function _openChapterInQBank(subjectName, chapterName) {
     _closeSearchDropdown();
     const input = _getSearchInput();
-    if (input) { input.value = ''; input.placeholder = 'Search subjects, chapters...'; }
+    if (input) { input.value = ''; input.placeholder = 'Search subjects, chapters, or question ID...'; }
     
     if (!window.db || !window.db.selectedQBankId) {
         if (window.openQBankSelection) window.openQBankSelection();
@@ -592,13 +601,50 @@ function _openChapterInQBank(subjectName, chapterName) {
 }
 
 function _searchQuestionById(term) {
-    // DISABLED to save Firestore reads: every random typing triggered a
-    // server get_question lookup (index build = tens of thousands of reads).
-    // No-op by design — just clear the dropdown and restore the input.
     _closeSearchDropdown();
     const input = _getSearchInput();
-    if (input) { input.value = ''; input.disabled = false; }
-    return;
+    if (!input) return;
+    
+    const originalPlaceholder = input.placeholder;
+    input.value = '';
+    input.placeholder = 'Searching…';
+    input.disabled = true;
+    
+    if (!window.qbankFindByRef) {
+        alert("Search is still loading — try again in a second.");
+        input.disabled = false;
+        input.placeholder = originalPlaceholder;
+        return;
+    }
+    
+    window.qbankFindByRef(term).then(hit => {
+        if (!hit) {
+            alert(`No question found for "${term}". Check the ID and try again.`);
+            return;
+        }
+        
+        if (hit.alternatives && hit.alternatives.length) {
+            const options = [{ bankId: hit.bankId, bankName: hit.bankName }, ...hit.alternatives];
+            const listing = options.map((o, i) => `${i + 1}. ${o.bankName}`).join('\n');
+            const ans = prompt(`This ID exists in ${options.length} banks:\n${listing}\n\nEnter the number to open:`, '1');
+            if (ans === null) return;
+            const idx = parseInt(ans, 10);
+            if (!isNaN(idx) && idx > 1 && idx <= options.length) {
+                const picked = options[idx - 1];
+                return window.qbankFindByRef(term, picked.bankId).then(newHit => {
+                    if (!newHit) { alert('Could not load that copy.'); return; }
+                    return window.qbankOpenSingle(newHit.bankId, newHit.bankName, newHit.question);
+                });
+            }
+        }
+        
+        return window.qbankOpenSingle(hit.bankId, hit.bankName, hit.question);
+    }).catch(e => {
+        alert('Search failed: ' + e.message);
+    }).finally(() => {
+        input.disabled = false;
+        input.placeholder = originalPlaceholder;
+    });
 }
 
 // Input handler with debouncing
@@ -655,7 +701,7 @@ window.handleHomeSearch = function(event) {
     }
     
     if (event.key === 'Enter') {
-        // If a suggestion is active, click it (subject/chapter only — 0 reads)
+        // If a suggestion is active, click it
         if (dropdown && !dropdown.classList.contains('hidden') && _searchActiveIndex >= 0) {
             const items = dropdown.querySelectorAll('.search-suggestion-item');
             if (items[_searchActiveIndex]) {
@@ -663,11 +709,14 @@ window.handleHomeSearch = function(event) {
                 return;
             }
         }
-
-        // Question-ID search on Enter is DISABLED to save Firestore reads.
-        // Random typing previously fired a server get_question lookup.
+        
+        // Otherwise, try ID search
+        const term = (inputEl.value || '').trim();
+        if (!term) return;
+        
         inputEl.blur();
         _closeSearchDropdown();
+        _searchQuestionById(term);
         return;
     }
     

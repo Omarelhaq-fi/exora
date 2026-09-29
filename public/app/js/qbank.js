@@ -2022,12 +2022,43 @@
     if (i !== -1) entry.questions.splice(i, 1);
   };
 
-  // ---- Question lookup by Firestore id or human code (DISABLED) ----
-  // Disabled to save Firestore reads: every random typing triggered a server
-  // get_question lookup (index build = tens of thousands of reads).
-  // Always resolves to null without any network call.
+  // ---- Question lookup by Firestore id or human code (used by home search) ----
+  // ALWAYS resolves via the server (Firestore = source of truth), so results
+  // reflect admin edits instantly. No client cache involvement.
   window.qbankFindByRef = async function(term, preferBankId) {
-    return null;
+    term = String(term || "").trim();
+    if (!term || !/^[A-Za-z0-9_-]{3,64}$/.test(term)) return null;
+    try {
+      // Search the preferred bank (or current one) first — most likely hit
+      const params = { ref: term };
+      const hint = preferBankId || currentQBankId;
+      if (hint) params.qbankId = hint;
+      const res = await apiGet("get_question", params);
+      if (!res || !res.question) return null;
+      const qd = res.question;
+      // Patch ONLY the in-memory entry — never overwrite the IndexedDB bank
+      // cache with a single question (that previously shrank whole banks).
+      try {
+        const entry = cachedQBanks[qd.qbankId];
+        if (entry && Array.isArray(entry.questions)) {
+          const i = entry.questions.findIndex(x => x.id === qd.id);
+          if (i >= 0) entry.questions[i] = { id: qd.id, text: qd.text, data: qd.data };
+          else entry.questions.push({ id: qd.id, text: qd.text, data: qd.data });
+        } else {
+          cachedQBanks[qd.qbankId] = { questions: [{ id: qd.id, text: qd.text, data: qd.data }], progress: {} };
+        }
+      } catch (e) { /* non-fatal */ }
+      const nameOf = (bid) => ((cachedCategories || []).find(c => c.id === bid) || {}).name || bid;
+      return {
+        bankId: qd.qbankId,
+        bankName: nameOf(qd.qbankId),
+        question: { id: qd.id, text: qd.text, data: qd.data },
+        alternatives: (res.alternatives || []).map(a => ({ bankId: a.qbankId, bankName: nameOf(a.qbankId) })),
+      };
+    } catch (e) {
+      console.error("qbankFindByRef failed:", e);
+      return null;
+    }
   };
 
   // Opens exactly one question as a mini-session.
